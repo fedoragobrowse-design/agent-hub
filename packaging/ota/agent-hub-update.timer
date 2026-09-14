@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily Agent Hub GitHub Release update check
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=24h
+RandomizedDelaySec=2h
+Persistent=true
+Unit=agent-hub-update.service
+
+[Install]
+WantedBy=timers.target
