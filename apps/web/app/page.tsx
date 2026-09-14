@@ -1,5 +1,6 @@
 "use client";
 import { useMemo, useState } from "react";
+import { signIn, signOut, useSession } from "next-auth/react";
 import { catalogFixtures } from "@agent-hub/catalog";
 import type { ExecutionTarget, HarnessId, RunEvent, RunState } from "@agent-hub/contracts";
 
@@ -18,14 +19,15 @@ function Status({ state }: { state: RunState | string }) { return <span classNam
 function RunTimeline({ events }: { events: RunEvent[] }) { return <section className="timeline" aria-label="Run timeline"><div className="panel-heading"><div><p className="eyebrow">Live signal</p><h2>Chronological run log</h2></div><Status state="running" /></div><ol>{events.map((event) => <li key={event.id} className={`event event-${event.type}`}><time>{event.at}</time><span className="event-dot" aria-hidden="true" /><p>{event.message}</p></li>)}</ol></section>; }
 
 export default function FlightDeck() {
+  const { data: session, status: sessionStatus } = useSession();
   const [harness, setHarness] = useState<HarnessId>("codex"); const [target, setTarget] = useState<ExecutionTarget>("hosted");
   const [prompt, setPrompt] = useState("Trace the authentication boundary and propose the smallest safe fix."); const [selected, setSelected] = useState<string[]>(["github-mcp"]);
-  const [runState, setRunState] = useState<RunState>("running"); const [events, setEvents] = useState(starterEvents); const [notice, setNotice] = useState<string | null>(null); const [signedIn, setSignedIn] = useState(true);
+  const [runState, setRunState] = useState<RunState>("running"); const [events, setEvents] = useState(starterEvents); const [notice, setNotice] = useState<string | null>(null);
   const artifact = useMemo(() => catalogFixtures.filter((item) => selected.includes(item.id)), [selected]);
-  function launch() { if (!prompt.trim()) { setNotice("Write a prompt before starting a run."); return; } setNotice(null); setRunState("queued"); setEvents((current) => [...current, { id: crypto.randomUUID(), runId: "r", at: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }), type: "state", message: `Queued on ${harness} via ${target} runner` }]); window.setTimeout(() => setRunState("running"), 550); }
+  function launch() { if (!prompt.trim()) { setNotice("Write a prompt before starting a run."); return; } if (!session?.user) { setNotice("Sign in with GitHub before starting a run."); return; } setNotice("Connect the managed API and bridge to submit a real run. This local deck does not fabricate executions."); }
   function toggle(id: string) { setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); }
   return <main className="shell">
-    <aside className="rail"><a className="brand" href="#top" aria-label="Agent Hub home"><span>AH</span><b>Agent<br />Hub</b></a><nav aria-label="Workspace navigation"><a className="nav-current" href="#run">Run</a><a href="#catalog">Catalog <em>2</em></a><a href="#runs">Runs</a><a href="#settings">Settings</a></nav><div className="rail-bottom"><p className="eyebrow">{signedIn ? "Signed in" : "Session"}</p><strong>{signedIn ? "octavia@github" : "Signed out"}</strong><button className="text-button" onClick={() => setSignedIn((value) => !value)}>{signedIn ? "Sign out" : "Sign in"}</button></div></aside>
+    <aside className="rail"><a className="brand" href="#top" aria-label="Agent Hub home"><span>AH</span><b>Agent<br />Hub</b></a><nav aria-label="Workspace navigation"><a className="nav-current" href="#run">Run</a><a href="#catalog">Catalog <em>2</em></a><a href="#runs">Runs</a><a href="#settings">Settings</a></nav><div className="rail-bottom"><p className="eyebrow">{sessionStatus === "loading" ? "Checking session" : session?.user ? "Signed in" : "Session"}</p><strong>{session?.user?.email ?? session?.user?.name ?? "Not signed in"}</strong>{session?.user ? <button className="text-button" onClick={() => signOut({ callbackUrl: "/signin" })}>Sign out</button> : <button className="text-button" onClick={() => signIn("github", { callbackUrl: "/" })}>Sign in</button>}</div></aside>
     <div className="workspace" id="top"><header><div><p className="eyebrow">Agent Hub / personal workspace</p><h1>Independent orchestration<br />for coding agents</h1><p className="hero-copy">Compare harnesses, approve extensions, and run the right agent for the job.</p></div><div className="header-status"><span className="pulse" />Live system status</div></header>
       <section className="run-grid" id="run"><div className="composer panel"><div className="panel-heading"><div><p className="eyebrow">New execution</p><h2>Route a prompt</h2></div><span className="run-id">RUN-0184</span></div>
         <form noValidate onSubmit={(event) => { event.preventDefault(); launch(); }}><label htmlFor="prompt">Task</label><textarea className="resize-none" id="prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={4} aria-describedby="prompt-help" /><p id="prompt-help" className="field-help">Enter sends the task after you choose a runner. Shift+Enter adds a line.</p>
