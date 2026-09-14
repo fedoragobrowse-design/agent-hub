@@ -24,3 +24,9 @@ On Linux x86_64, run `./packaging/build-deb.sh`. The resulting package embeds th
 ## Automatic updates
 
 Release-built packages use a systemd timer to check GitHub Releases daily. It downloads the next `.deb` only when the release checksum matches, then installs it without user intervention. The GitHub Actions release workflow injects its repository identifier into the artifact; local builds intentionally leave the update source blank.
+
+## Production readiness
+
+GitHub authentication is real when `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET`, and `AUTH_SECRET` are configured. The flight deck deliberately refuses to invent a run when its managed API and bridge are not connected.
+
+Cross-machine history, live events, encrypted credentials, and hosted execution require a deployed Agent Hub API backed by PostgreSQL, Redis, S3-compatible storage, and a KMS, plus a public outbound-WebSocket endpoint for bridges. The checked-in schema and bridge protocol define those boundaries; local development state is not presented as synchronized production data.
