@@ -1,0 +1,9 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["apps/web"],
+  "canonicalMap": "UX-CONTRACT.md",
+  "requiredCapabilities": ["Form", "Toast", "Scrollbar"],
+  "ownership": {"Form": "native", "Toast": "shared", "Scrollbar": "global"},
+  "requiredCommands": ["typecheck", "build"],
+  "commands": {"typecheck": "pnpm typecheck", "build": "pnpm build"}
+}
