@@ -1,0 +1,12 @@
+[Unit]
+Description=Check GitHub Releases for Agent Hub updates
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/agent-hub/bin/agent-hub-update
+User=root
+PrivateTmp=true
+ProtectHome=true
+UMask=0077
