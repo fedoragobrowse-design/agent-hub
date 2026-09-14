@@ -1,0 +1,26 @@
+name: Release Agent Hub
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run --filter '*' typecheck
+      - run: VERSION="${GITHUB_REF_NAME#v}" UPDATE_REPOSITORY="${{ github.repository }}" BUN_BIN="$(which bun)" sh packaging/build-deb.sh
+      - run: |
+          cd dist
+          sha256sum "agent-hub_${GITHUB_REF_NAME#v}_amd64.deb" > "agent-hub_${GITHUB_REF_NAME#v}_amd64.deb.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.deb
+            dist/*.sha256
