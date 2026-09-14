@@ -1,0 +1,4 @@
+import { signIn } from "@/auth";
+export default function SignInPage() {
+  return <main style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: "24px" }}><section className="panel" style={{ width: "min(420px, 100%)", padding: "28px" }}><p className="eyebrow">Agent Hub</p><h1 style={{ marginBottom: "12px" }}>Sign in to your flight deck</h1><p style={{ color: "var(--muted)", fontSize: "14px", lineHeight: 1.5, marginBottom: "22px" }}>Use GitHub to create your personal workspace. Repository access is requested separately when you connect a repository.</p><form noValidate action={async () => { "use server"; await signIn("github", { redirectTo: "/" }); }}><button className="launch" type="submit" style={{ width: "100%", justifyContent: "center" }}>Continue with GitHub</button></form></section></main>;
+}
