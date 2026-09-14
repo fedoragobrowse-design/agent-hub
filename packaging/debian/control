@@ -1,0 +1,8 @@
+Package: agent-hub
+Version: @VERSION@
+Section: devel
+Priority: optional
+Architecture: amd64
+Maintainer: Agent Hub <maintainers@agenthub.local>
+Description: Agent Hub multi-harness developer flight deck
+ A self-contained local launcher for the Agent Hub web workspace and local bridge.
