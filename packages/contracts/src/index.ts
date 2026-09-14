@@ -9,6 +9,7 @@ export type Capability = "network" | "filesystem-read" | "filesystem-write" | "s
 export interface ExtensionArtifact {
   id: string; name: string; version: string; digest: string; kind: ExtensionKind;
   source: { type: "hub" | "github" | "claude-marketplace" | "url" | "git"; url: string; publisher: string };
+  marketplace?: { name: string; source: string; plugin: string };
   license?: string; capabilities: Capability[]; requiredSecrets: string[];
   transports?: Array<"stdio" | "http" | "sse">;
   compatibility: Record<HarnessId, SupportLevel>;
