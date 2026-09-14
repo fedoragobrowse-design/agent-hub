@@ -23,8 +23,9 @@ class CliAdapter implements HarnessAdapter {
   async planInstall(artifact: ExtensionArtifact): Promise<InstallPlan> {
     const support = artifact.compatibility[this.definition.id];
     const configPath = join(this.home, this.definition.config);
+    const claudeMarketplace = this.definition.id === "claude-code" ? artifact.marketplace : undefined;
     return { artifact: { id: artifact.id, name: artifact.name, digest: artifact.digest, kind: artifact.kind }, harness: this.definition.id, support,
-      commands: support === "native" ? [`Configure ${this.definition.command} with ${artifact.name}`] : [`Add Hub skill bridge for ${artifact.name}`],
+      commands: claudeMarketplace ? [`claude plugin marketplace add ${claudeMarketplace.source} --scope user`, `claude plugin install ${claudeMarketplace.plugin}@${claudeMarketplace.name}`] : support === "native" ? [`Configure ${this.definition.command} with ${artifact.name}`] : [`Add Hub skill bridge for ${artifact.name}`],
       files: [configPath], transports: artifact.transports ?? [], networkDestinations: artifact.capabilities.includes("network") ? [new URL(artifact.source.url).origin] : [],
       requiredSecrets: artifact.requiredSecrets, restartRequired: true };
   }
