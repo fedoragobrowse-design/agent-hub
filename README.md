@@ -30,3 +30,7 @@ Release-built packages use a systemd timer to check GitHub Releases daily. It do
 GitHub authentication is real when `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET`, and `AUTH_SECRET` are configured. The flight deck deliberately refuses to invent a run when its managed API and bridge are not connected.
 
 Cross-machine history, live events, encrypted credentials, and hosted execution require a deployed Agent Hub API backed by PostgreSQL, Redis, S3-compatible storage, and a KMS, plus a public outbound-WebSocket endpoint for bridges. The checked-in schema and bridge protocol define those boundaries; local development state is not presented as synchronized production data.
+
+## Marketplace imports
+
+The catalog can parse [Anthropic/Claude Code marketplace manifests](docs/marketplace-imports.md) and create explicit Claude Code install plans. Private HTTPS or GitHub custom sources are also supported as pending, approval-gated artifacts. Imports do not execute plugin code.
