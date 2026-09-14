@@ -1,0 +1,35 @@
+#!/bin/sh
+# Systemd invokes this as root. It only accepts a checksum-verified GitHub Release asset.
+set -eu
+
+CONFIG="${AGENT_HUB_UPDATE_CONFIG:-/etc/agent-hub/update.conf}"
+CACHE="${AGENT_HUB_UPDATE_CACHE:-/var/cache/agent-hub}"
+PACKAGE=agent-hub
+ARCH=amd64
+
+[ -r "$CONFIG" ] || exit 0
+. "$CONFIG"
+[ -n "${UPDATE_REPOSITORY:-}" ] || exit 0
+[ "${UPDATE_CHANNEL:-stable}" = "stable" ] || exit 0
+
+mkdir -p "$CACHE"
+RELEASE_JSON="$CACHE/release.json"
+curl --fail --silent --show-error --location \
+  -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/$UPDATE_REPOSITORY/releases/latest" > "$RELEASE_JSON"
+
+VERSION=$(tr -d '[:space:]' < "$RELEASE_JSON" | sed -n 's/.*"tag_name":"v\{0,1\}\([^"]*\)".*/\1/p' | head -n 1)
+[ -n "$VERSION" ] || exit 1
+CURRENT=$(dpkg-query -W -f='${Version}' "$PACKAGE" 2>/dev/null || printf '0')
+[ "$(printf '%s\n%s\n' "$CURRENT" "$VERSION" | sort -V | tail -n 1)" = "$VERSION" ] || exit 0
+[ "$CURRENT" != "$VERSION" ] || exit 0
+
+ASSET="agent-hub_${VERSION}_${ARCH}.deb"
+DEB="$CACHE/$ASSET"
+SUM="$CACHE/$ASSET.sha256"
+BASE="https://github.com/$UPDATE_REPOSITORY/releases/download/v$VERSION"
+curl --fail --silent --show-error --location "$BASE/$ASSET" -o "$DEB"
+curl --fail --silent --show-error --location "$BASE/$ASSET.sha256" -o "$SUM"
+(cd "$CACHE" && sha256sum -c "$(basename "$SUM")")
+dpkg -i "$DEB"
+rm -f "$RELEASE_JSON" "$DEB" "$SUM"
