@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Agent Hub
+GenericName=Agent harness flight deck
+Comment=Run approved work across coding-agent harnesses
+Exec=agent-hub-desktop
+Terminal=false
+Categories=Development;IDE;
+Keywords=AI;Agent;MCP;Codex;Claude;
+StartupNotify=true
