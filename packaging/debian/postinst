@@ -11,4 +11,7 @@ if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
   systemctl daemon-reload
   systemctl enable --now agent-hub-update.timer
 fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database /usr/share/applications || true
+fi
 echo "Agent Hub installed. Automatic GitHub Release updates are enabled when this package was built by its release workflow." >&2
