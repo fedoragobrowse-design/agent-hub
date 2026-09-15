@@ -19,7 +19,7 @@ Credentials are represented by opaque references. The production `SecretVault` i
 
 ## Debian package
 
-On Linux x86_64, run `./packaging/build-deb.sh`. The resulting package embeds the Bun runtime and locked dependencies; install with `sudo dpkg -i dist/agent-hub_0.1.0_amd64.deb`, then run `agent-hub`.
+On Linux x86_64, run `./packaging/build-deb.sh`. The resulting package embeds the Bun runtime and locked dependencies; install with `sudo dpkg -i dist/agent-hub_0.1.0_amd64.deb`. It registers **Agent Hub** in desktop application launchers; selecting it starts the local service and opens the flight deck in the default browser. The `agent-hub` command remains available for terminal use.
 
 ## Automatic updates
 
