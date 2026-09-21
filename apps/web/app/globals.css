@@ -106,7 +106,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
   text-align: left;
 }
 .new-chat:hover { border-color: var(--omp-border-strong); background: oklch(100% 0 0 / 0.07); }
-.new-chat kbd { display: none; }
+.new-chat kbd { margin-left: auto; padding: 2px 6px; border: 1px solid var(--omp-border); border-radius: 4px; color: var(--omp-faint); font: 10px var(--font-mono); }
 
 /* ---- sidebar pickers / nav ---- */
 .harness-picker, .tool-picker { display: grid; gap: 4px; }
@@ -486,11 +486,10 @@ select.composer-tool.composer-select option { color: #202b43; }
 
 @media (max-width: 760px) {
   .chat-shell { grid-template-columns: 1fr; }
-  .switchboard { position: static; height: auto; padding: 13px; }
-  .brand, .new-chat, .tool-picker, .account { display: none; }
+  .switchboard { position: static; height: auto; max-height: 38vh; padding: 13px; overflow-y: auto; border-right: 0; border-bottom: 1px solid var(--omp-border); }
   .harness-picker { grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; }
   .harness-picker h2 { margin: 0; white-space: nowrap; }
-  .harness-list { display: flex; overflow: auto; }
+  .harness-list { display: flex; overflow-x: auto; padding-bottom: 4px; }
   .harness { display: flex; width: auto; min-width: max-content; padding: 6px 10px; border-radius: 8px; }
   .harness small { display: none; }
   .harness-mark { width: 20px; height: 20px; font-size: 12px; }
@@ -499,11 +498,15 @@ select.composer-tool.composer-select option { color: #202b43; }
   .conversation-intro { margin-bottom: 20px; }
   .conversation-intro h1 { font-size: 30px; }
   .composer { padding-bottom: 18px; }
+  .composer-tools { max-height: 88px; overflow-y: auto; }
+  .slash-menu { max-height: 240px; }
   .message-system { padding-left: 0; }
+  .file-browser { max-height: 60vh; }
 }
 @media (max-width: 430px) {
   .conversation-intro h1 { font-size: 27px; }
   .composer-actions { align-items: center; }
+  .composer-tool { max-width: 130px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }

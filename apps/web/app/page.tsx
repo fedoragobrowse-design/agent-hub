@@ -423,6 +423,17 @@ export default function OmpDeck() {
     listRef.current?.lastElementChild?.scrollIntoView({ block: "nearest" });
   }, [messages, sending, panel]);
 
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        fresh();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   async function loadPanel(id: PanelId) {
     try {
       if (id === "sessions" && sessions.length === 0 && !sessionsError) {
@@ -1162,8 +1173,8 @@ export default function OmpDeck() {
           <span className="brand-sigil">⬢</span>
           <span>Oh My P(i)</span>
         </a>
-        <button className="new-chat" type="button" onClick={fresh}>
-          <span aria-hidden="true">＋</span> New chat
+        <button className="new-chat" type="button" onClick={fresh} title="Start fresh (Ctrl+K)">
+          <span aria-hidden="true">＋</span> New chat <kbd>⌃K</kbd>
         </button>
 
         <nav className="tool-picker" aria-label="Panels">
