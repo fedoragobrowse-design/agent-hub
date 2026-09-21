@@ -372,11 +372,12 @@ export default function OmpDeck() {
     }
   }
 
-  async function discover() {
+  async function discover(query?: string) {
     setMarketError(null);
     try {
+      const q = (query ?? marketQuery).trim();
       const data = await api<{ marketplace?: unknown }>(
-        `/api/omp/plugins?discover=${encodeURIComponent(marketQuery.trim())}`,
+        `/api/omp/plugins?discover=${encodeURIComponent(q)}`,
       );
       setMarket(data.marketplace ?? null);
     } catch (error) {
@@ -1136,17 +1137,30 @@ export default function OmpDeck() {
               <button type="button" onClick={() => void discover()}>
                 Discover
               </button>
+              <button
+                type="button"
+                title="Browse fedoragobrowse-design/agent-hub-marketplace"
+                onClick={() => { setMarketQuery("agent-hub"); void discover("agent-hub"); }}
+              >
+                Agent Hub ★
+              </button>
             </div>
-            {marketError && (
-              <div className="alert-box" role="alert">
-                {marketError}
+            {[
+              { name: "chess-muserelf", blurb: "Local chess vs muserelf engine." },
+              { name: "fritzing", blurb: "Fritzing .fzz + custom parts via fz CLI." },
+              { name: "pico", blurb: "Pico over USB: REPL, sync, flash." },
+              { name: "kicad", blurb: "KiCad schematics, PCBs, ERC/DRC." },
+            ].map((entry) => (
+              <div className="panel-row" key={entry.name}>
+                <b>{entry.name}@agent-hub</b>
+                <small>{entry.blurb}</small>
+                <div className="row-actions">
+                  <button type="button" onClick={() => void pluginAction("install", `${entry.name}@agent-hub`)}>
+                    Install
+                  </button>
+                </div>
               </div>
-            )}
-            {market !== null && (
-              <div className="tool-card" data-state="done" style={{ whiteSpace: "pre-wrap" }}>
-                {JSON.stringify(market, null, 2).slice(0, 4000)}
-              </div>
-            )}
+            ))}
           </div>
         )}
 
