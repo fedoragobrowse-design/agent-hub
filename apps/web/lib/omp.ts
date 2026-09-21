@@ -30,7 +30,17 @@ export type OmpPrintOptions = {
   autoApprove?: boolean;
   tools?: string;
   printThoughts?: boolean;
+  cwd?: string;
+  maxTime?: string;
 };
+
+export type OmpEvent =
+  | { type: "text"; delta: string }
+  | { type: "thinking"; delta: string }
+  | { type: "tool_start"; name: string; intent: string }
+  | { type: "tool_end"; name: string; ok: boolean; summary: string }
+  | { type: "done"; text: string; sessionId: string }
+  | { type: "error"; message: string };
 
 function runOmp(args: string[], input?: string, timeoutMs = 120000): Promise<string> {
   const { promise, resolve, reject } = Promise.withResolvers<string>();
@@ -114,6 +124,8 @@ export async function ompPrint(
   if (opts.autoApprove) args.push("--auto-approve");
   if (opts.tools) args.push("--tools", opts.tools);
   if (opts.printThoughts) args.push("--print-thoughts");
+  if (opts.cwd) args.push("--cwd", opts.cwd);
+  if (opts.maxTime) args.push("--max-time", opts.maxTime);
   args.push(prompt);
   const raw = await runOmp(args, undefined, 300000);
   const lines = raw.split("\n").filter(Boolean);
@@ -140,6 +152,136 @@ export async function ompPrint(
     }
   }
   return text.trim();
+}
+
+type JsonEvent = {
+  type?: string;
+  assistantMessageEvent?: { type?: string; delta?: string; content?: string; toolCall?: { name?: string; arguments?: unknown } };
+  toolName?: string;
+  toolCallId?: string;
+  args?: unknown;
+  intent?: string;
+  result?: { content?: Array<{ text?: string }> };
+  isError?: boolean;
+  message?: { role?: string; content?: Array<{ type?: string; text?: string }> };
+};
+
+function summarizeResult(result: JsonEvent["result"]): string {
+  const parts = result?.content ?? [];
+  const text = parts.map((part) => part.text ?? "").join("").trim();
+  if (!text) return "";
+  const first = text.split("\n")[0] ?? "";
+  return first.length > 160 ? `${first.slice(0, 160)}…` : first;
+}
+
+/** Streams one `omp -p --mode json` run as UI events. Resolves with the final text. */
+export async function streamOmp(
+  prompt: string,
+  opts: OmpPrintOptions,
+  onEvent: (event: OmpEvent) => void,
+): Promise<{ text: string; sessionId: string }> {
+  const args = ["--no-session", "-p", "--mode", "json"];
+  if (opts.model) args.push("--model", opts.model);
+  if (opts.resume) args.push("--resume", opts.resume);
+  if (opts.thinking) args.push("--thinking", opts.thinking);
+  if (opts.advisor) args.push("--advisor");
+  if (opts.approvalMode) args.push("--approval-mode", opts.approvalMode);
+  if (opts.autoApprove) args.push("--auto-approve");
+  if (opts.tools) args.push("--tools", opts.tools);
+  if (opts.printThoughts) args.push("--print-thoughts");
+  if (opts.cwd) args.push("--cwd", opts.cwd);
+  if (opts.maxTime) args.push("--max-time", opts.maxTime);
+  args.push(prompt);
+
+  const { promise, resolve, reject } = Promise.withResolvers<{ text: string; sessionId: string }>();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 300000);
+  const child = spawn("omp", args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    signal: controller.signal,
+    cwd: opts.cwd,
+  });
+  let buffer = "";
+  let text = "";
+  let sessionId = "";
+  let err = "";
+  const pendingTools = new Map<string, string>();
+
+  function handleLine(line: string): void {
+    if (!line.trim()) return;
+    let event: JsonEvent;
+    try {
+      event = JSON.parse(line) as JsonEvent;
+    } catch {
+      return;
+    }
+    if (event.type === "session" && typeof (event as unknown as { id?: unknown }).id === "string") {
+      sessionId = (event as unknown as { id: string }).id;
+    }
+    const inner = event.assistantMessageEvent;
+    if (event.type === "message_update" && inner) {
+      if (inner.type === "text_delta" && inner.delta) {
+        text += inner.delta;
+        onEvent({ type: "text", delta: inner.delta });
+      } else if (inner.type === "thinking_delta" && inner.delta) {
+        onEvent({ type: "thinking", delta: inner.delta });
+      } else if (inner.type === "toolcall_end" && inner.toolCall?.name) {
+        onEvent({ type: "tool_start", name: inner.toolCall.name, intent: "" });
+      }
+    } else if (event.type === "tool_execution_start" && event.toolName) {
+      if (event.toolCallId) pendingTools.set(event.toolCallId, event.toolName);
+      onEvent({
+        type: "tool_start",
+        name: event.toolName,
+        intent: typeof event.intent === "string" ? event.intent : "",
+      });
+    } else if (event.type === "tool_execution_end") {
+      const name = (event.toolName ?? (event.toolCallId ? pendingTools.get(event.toolCallId) : undefined)) ?? "tool";
+      if (event.toolCallId) pendingTools.delete(event.toolCallId);
+      onEvent({ type: "tool_end", name, ok: !event.isError, summary: summarizeResult(event.result) });
+    } else if (
+      (event.type === "message_end" || event.type === "turn_end") &&
+      event.message?.role === "assistant"
+    ) {
+      const joined = (event.message.content ?? [])
+        .filter((part) => part.type === "text" && part.text)
+        .map((part) => part.text as string)
+        .join("");
+      if (joined && !text) {
+        text = joined;
+        onEvent({ type: "text", delta: joined });
+      }
+    }
+  }
+
+  child.stdout.on("data", (chunk: Buffer) => {
+    buffer += chunk.toString();
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) handleLine(line);
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    err += chunk.toString();
+  });
+  child.on("error", (error) => {
+    clearTimeout(timer);
+    if (controller.signal.aborted) reject(new Error("omp run timed out after 5 minutes."));
+    else reject(error);
+  });
+  child.on("close", (code) => {
+    clearTimeout(timer);
+    if (buffer.trim()) handleLine(buffer);
+    if (controller.signal.aborted) {
+      reject(new Error("omp run timed out after 5 minutes."));
+    } else if (code === 0) {
+      onEvent({ type: "done", text: text.trim(), sessionId });
+      resolve({ text: text.trim(), sessionId });
+    } else {
+      onEvent({ type: "error", message: err.trim() || `omp exited ${code ?? "unknown"}` });
+      reject(new Error(err.trim() || `omp exited ${code ?? "unknown"}`));
+    }
+  });
+  return promise;
 }
 
 export async function checkGateway(): Promise<{ reachable: boolean; url: string | null }> {
@@ -340,6 +482,25 @@ async function collectJsonlFiles(dir: string, depth: number, out: string[]): Pro
     if (entry.isFile && entry.name.endsWith(".jsonl")) out.push(full);
     else if (entry.isDir && depth > 0) await collectJsonlFiles(full, depth - 1, out);
   }
+}
+
+export async function getServerCwd(): Promise<string> {
+  return path.resolve(process.cwd(), "..", "..");
+}
+
+export async function listChildDirs(dir: string): Promise<{ parent: string; dirs: string[] }> {
+  const resolved = path.resolve(dir || process.cwd());
+  const repoRoot = path.resolve(process.cwd(), "..", "..");
+  const allowed = [repoRoot, os.homedir()];
+  const ok = allowed.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`));
+  if (!ok) throw new Error("Directory must stay inside the repo or home directory.");
+  const dirents = await fs.readdir(resolved, { withFileTypes: true });
+  const dirs = dirents
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules")
+    .map((entry) => entry.name)
+    .sort()
+    .slice(0, 100);
+  return { parent: path.dirname(resolved), dirs: dirs.map((name) => path.join(resolved, name)) };
 }
 
 export async function listSessions(): Promise<OmpSession[]> {

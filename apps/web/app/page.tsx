@@ -2,11 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 
+type ToolActivity = { id: string; name: string; intent: string; done: boolean; ok: boolean; summary: string };
+
 type ChatMessage = {
   id: string;
-  role: "assistant" | "user" | "system";
+  role: "assistant" | "user" | "system" | "activity";
   text: string;
   model?: string;
+  tools?: ToolActivity[];
+  cwd?: string;
 };
 
 type OmpModel = {
@@ -63,7 +67,26 @@ const PANELS: Array<{ id: PanelId; mark: string; label: string; hint: string }> 
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"];
 const APPROVAL_MODES = ["always-ask", "write", "yolo"];
+const RUN_MODES = [
+  { id: "", label: "Agent", hint: "full tools" },
+  { id: "plan", label: "Plan", hint: "read-only plan then build" },
+  { id: "prewalk", label: "Prewalk", hint: "cheap model after plan" },
+] as const;
 
+type SlashEntry = { name: string; hint: string; detail: string };
+const SLASH_COMMANDS: SlashEntry[] = [
+  { name: "/model", hint: "<fuzzy>", detail: "Switch model: /model opus" },
+  { name: "/agents", hint: "", detail: "Show running / idle / parked agents" },
+  { name: "/compact", hint: "", detail: "Compact context now" },
+  { name: "/context", hint: "", detail: "Working directory + context usage" },
+  { name: "/thinking", hint: "<level>", detail: "off minimal low medium high xhigh max auto" },
+  { name: "/advisor", hint: "[on|off]", detail: "Toggle advisor runtime" },
+  { name: "/export", hint: "<path>", detail: "Export session to HTML" },
+  { name: "/share", hint: "", detail: "Share session via encrypted link" },
+  { name: "/fork", hint: "", detail: "Fork session branch" },
+  { name: "/resume", hint: "<id>", detail: "Resume session by id prefix" },
+  { name: "/help", hint: "", detail: "List commands" },
+];
 const initialMessages: ChatMessage[] = [
   {
     id: "welcome",
@@ -135,8 +158,18 @@ export default function OmpDeck() {
   const [printThoughts, setPrintThoughts] = useState(false);
   const [resume, setResume] = useState("");
   const [mode, setMode] = useState("—");
+  const [runMode, setRunMode] = useState<(typeof RUN_MODES)[number]["id"]>("");
+  const [cwd, setCwd] = useState("");
+  const [cwdPicker, setCwdPicker] = useState<{ parent: string; dirs: string[] } | null>(null);
+  const [cwdError, setCwdError] = useState<string | null>(null);
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [streamingText, setStreamingText] = useState("");
+  const [liveTools, setLiveTools] = useState<ToolActivity[]>([]);
+  const [thinkingPreview, setThinkingPreview] = useState("");
   const [panel, setPanel] = useState<PanelId>("chat");
   const listRef = useRef<HTMLOListElement>(null);
+  const liveToolsRef = useRef<ToolActivity[]>([]);
 
   // Panel state
   const [modelQuery, setModelQuery] = useState("");
@@ -169,7 +202,6 @@ export default function OmpDeck() {
   const [configMsg, setConfigMsg] = useState<string | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [modelRoles, setModelRoles] = useState<Record<string, string>>({});
-
   useEffect(() => {
     let active = true;
     void api<{ models?: OmpModel[] }>("/api/omp/models")
@@ -187,6 +219,11 @@ export default function OmpDeck() {
           setNotice("Could not list OMP models. Check the omp binary is installed.");
         }
       });
+    void api<{ cwd?: string }>("/api/omp/cwd")
+      .then((data) => {
+        if (active && data.cwd) setCwd(data.cwd);
+      })
+      .catch(() => undefined);
     void api<{
       omp?: { version?: string };
       gateway?: { reachable: boolean; url: string | null };
@@ -275,42 +312,170 @@ export default function OmpDeck() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panel]);
 
+  useEffect(() => {
+    liveToolsRef.current = liveTools;
+  }, [liveTools]);
+
+  type StreamEvent =
+    | { type: "text"; delta: string }
+    | { type: "thinking"; delta: string }
+    | { type: "tool_start"; name: string; intent: string }
+    | { type: "tool_end"; name: string; ok: boolean; summary: string }
+    | { type: "done"; text: string; sessionId: string }
+    | { type: "error"; message: string };
+
+  function applySlashCommand(text: string): boolean {
+    const match = text.match(/^\/(\S+)\s*(.*)$/);
+    if (!match) return false;
+    const name = match[1]?.toLowerCase() ?? "";
+    const args = (match[2] ?? "").trim();
+    if (name === "model" && args) {
+      const hit = models.find(
+        (row) => row.selector === args || row.selector.endsWith(`/${args}`) || row.name === args,
+      );
+      setModel(hit ? hit.selector : args);
+      setNotice(hit ? `Model → ${hit.selector}.` : `Model → ${args} (sent as fuzzy match).`);
+      setPrompt("");
+      return true;
+    }
+    if (name === "thinking" && args) {
+      if (THINKING_LEVELS.includes(args)) {
+        setThinking(args);
+        setNotice(`Thinking → ${args}.`);
+      } else {
+        setNotice(`Thinking levels: ${THINKING_LEVELS.join(" ")}.`);
+      }
+      setPrompt("");
+      return true;
+    }
+    if (name === "advisor" && (args === "on" || args === "off" || args === "")) {
+      setAdvisor(args === "on" || (args === "" && !advisor));
+      setNotice(`Advisor ${args === "off" ? "off." : "on."}`);
+      setPrompt("");
+      return true;
+    }
+    return false;
+  }
+
+  async function openCwdPicker(dir?: string) {
+    setCwdError(null);
+    try {
+      const data = await api<{ parent: string; dirs: string[] }>(
+        `/api/omp/cwd?dir=${encodeURIComponent(dir ?? cwd)}`,
+      );
+      setCwdPicker(data);
+    } catch (error) {
+      setCwdError(error instanceof Error ? error.message : "Could not list directories.");
+    }
+  }
+
   async function send() {
     const text = prompt.trim();
     if (!text || sending) {
       if (!text) setNotice("Write a message before sending it.");
       return;
     }
+    if (applySlashCommand(text)) return;
     setNotice(null);
     setSending(true);
-    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", text };
+    setSlashOpen(false);
+    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", text, cwd };
     setMessages((current) => [...current, userMessage]);
     setPrompt("");
+    const assistantId = crypto.randomUUID();
+    setStreamingText("");
+    setLiveTools([]);
+    setThinkingPreview("");
+    setMessages((current) => [...current, { id: assistantId, role: "assistant", text: "", model, cwd }]);
     try {
-      const data = await api<{ text?: string }>("/api/omp/chat", {
+      const body: Record<string, unknown> = {
+        prompt: text,
+        model: model || undefined,
+        resume: resume || undefined,
+        thinking,
+        advisor: advisor || undefined,
+        approvalMode: approvalMode || undefined,
+        autoApprove: autoApprove || undefined,
+        tools: toolsInput.trim() || undefined,
+        printThoughts: printThoughts || undefined,
+        cwd: cwd || undefined,
+      };
+      if (runMode === "plan") {
+        body["tools"] = "";
+        body["approvalMode"] = "always-ask";
+      }
+      const response = await fetch("/api/omp/chat/stream", {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          prompt: text,
-          model: model || undefined,
-          resume: resume || undefined,
-          thinking,
-          advisor: advisor || undefined,
-          approvalMode: approvalMode || undefined,
-          autoApprove: autoApprove || undefined,
-          tools: toolsInput.trim() || undefined,
-          printThoughts: printThoughts || undefined,
-        }),
+        headers: { "content-type": "application/json", accept: "text/event-stream" },
+        body: JSON.stringify(body),
       });
-      setMessages((current) => [
-        ...current,
-        { id: crypto.randomUUID(), role: "assistant", text: data.text ?? "", model },
-      ]);
+      if (!response.ok || !response.body) throw new Error(`OMP run failed: ${response.status}.`);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let acc = "";
+      let closed = false;
+      while (!closed) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+        for (const part of parts) {
+          const line = part.split("\n").find((row) => row.startsWith("data: "));
+          if (!line) continue;
+          const event = JSON.parse(line.slice(6)) as StreamEvent;
+          if (event.type === "text") {
+            acc += event.delta;
+            setStreamingText(acc);
+            setMessages((current) => current.map((row) => (row.id === assistantId ? { ...row, text: acc } : row)));
+          } else if (event.type === "thinking") {
+            setThinkingPreview((prev) => (prev + event.delta).slice(-400));
+          } else if (event.type === "tool_start") {
+            setLiveTools((prev) => [...prev.slice(-7), { id: crypto.randomUUID(), name: event.name, intent: event.intent, done: false, ok: true, summary: "" }]);
+          } else if (event.type === "tool_end") {
+            setLiveTools((prev) => {
+              const next = [...prev];
+              const open = [...next].reverse().find((tool) => tool.name === event.name && !tool.done);
+              if (open) {
+                open.done = true;
+                open.ok = event.ok;
+                open.summary = event.summary;
+              }
+              return next;
+            });
+          } else if (event.type === "done") {
+            closed = true;
+            if (event.sessionId) setResume(event.sessionId);
+            if (!acc && event.text) {
+              acc = event.text;
+              setMessages((current) => current.map((row) => (row.id === assistantId ? { ...row, text: acc } : row)));
+            }
+          } else if (event.type === "error") {
+            throw new Error(event.message);
+          }
+        }
+      }
+      setMessages((current) =>
+        current.map((row) =>
+          row.id === assistantId
+            ? { ...row, text: acc || "(no text — see tool activity)", tools: liveToolsSnapshot() }
+            : row,
+        ),
+      );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "OMP could not answer.");
+      setMessages((current) => current.filter((row) => row.id !== assistantId || row.text));
     } finally {
       setSending(false);
+      setStreamingText("");
+      setLiveTools([]);
+      setThinkingPreview("");
     }
+  }
+
+  function liveToolsSnapshot() {
+    return liveToolsRef.current;
   }
 
   function fresh() {
@@ -462,6 +627,9 @@ export default function OmpDeck() {
 
   const started = messages.length > 1 || sending;
   const empty = panel === "chat" && !started;
+  const slashMatches = prompt.startsWith("/") && !prompt.includes(" ")
+    ? SLASH_COMMANDS.filter((entry) => entry.name.startsWith(prompt.toLowerCase())).slice(0, 8)
+    : [];
   const composer = (
     <form
       className="composer"
@@ -476,6 +644,38 @@ export default function OmpDeck() {
           {notice}
         </p>
       )}
+      <button
+        type="button"
+        className="composer-cwd"
+        onClick={() => void openCwdPicker()}
+        title="Working directory — click to change"
+      >
+        <span aria-hidden="true">📁</span> {cwd || "…"}
+        {cwdError ? ` · ${cwdError}` : ""}
+      </button>
+      {cwdPicker && (
+        <div className="prompt-box" role="dialog" aria-label="Choose working directory">
+          <b>{cwd}</b>
+          <div className="prompt-actions" style={{ flexWrap: "wrap" }}>
+            <button type="button" onClick={() => { setCwd(cwdPicker.parent); setCwdPicker(null); void openCwdPicker(cwdPicker.parent); }}>
+              ↑ parent
+            </button>
+            {cwdPicker.dirs.slice(0, 12).map((dir) => (
+              <button
+                key={dir}
+                type="button"
+                onClick={() => { setCwd(dir); setCwdPicker(null); }}
+                title={dir}
+              >
+                {dir.split("/").pop()}
+              </button>
+            ))}
+            <button type="button" onClick={() => setCwdPicker(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+      )}
       <div className="composer-box">
         <label className="sr-only" htmlFor="prompt">
           Message Oh My P(i)
@@ -483,21 +683,108 @@ export default function OmpDeck() {
         <textarea
           id="prompt"
           value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
+          onChange={(event) => {
+            const next = event.target.value;
+            setPrompt(next);
+            const isSlash = next.startsWith("/") && !next.includes(" ");
+            setSlashOpen(isSlash);
+            setSlashIndex(0);
+          }}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
+            if (slashOpen && slashMatches.length > 0 && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+              event.preventDefault();
+              setSlashIndex((prev) => (event.key === "ArrowDown" ? (prev + 1) % slashMatches.length : (prev - 1 + slashMatches.length) % slashMatches.length));
+            } else if (slashOpen && slashMatches.length > 0 && event.key === "Tab") {
+              event.preventDefault();
+              const pick = slashMatches[slashIndex];
+              if (pick) setPrompt(`${pick.name} `);
+              setSlashOpen(false);
+            } else if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               void send();
+            } else if (event.key === "Escape") {
+              setSlashOpen(false);
+              setCwdPicker(null);
             }
           }}
-          placeholder="How can I help you today?"
+          placeholder="How can I help you today? Try / for commands."
           rows={2}
         />
+        {slashOpen && slashMatches.length > 0 && (
+          <div className="slash-menu" role="listbox" aria-label="Slash commands">
+            {slashMatches.map((entry, index) => (
+              <button
+                key={entry.name}
+                type="button"
+                role="option"
+                aria-selected={index === slashIndex}
+                className={index === slashIndex ? "slash-item active" : "slash-item"}
+                onClick={() => { setPrompt(`${entry.name} `); setSlashOpen(false); }}
+              >
+                <b>{entry.name}</b> <span>{entry.hint}</span>
+                <small>{entry.detail}</small>
+              </button>
+            ))}
+          </div>
+        )}
+        {(streamingText || liveTools.length > 0 || thinkingPreview) && (
+          <div className="tool-card" data-state="in-progress" aria-live="polite">
+            <div className="tool-head">
+              <span className="gold-label">agent working{thinkingPreview ? ` · ${thinkingPreview.slice(-80)}` : ""}</span>
+              <span>{liveTools.filter((tool) => tool.done).length}/{liveTools.length} tools</span>
+            </div>
+            {liveTools.slice(-5).map((tool) => (
+              <div key={tool.id}>
+                {tool.done ? (tool.ok ? "✓" : "✗") : "…"} {tool.name}{tool.intent ? ` — ${tool.intent}` : ""}{tool.summary ? ` · ${tool.summary}` : ""}
+              </div>
+            ))}
+          </div>
+        )}
         <div className="composer-actions">
           <div className="composer-tools">
-            <button type="button" className="composer-tool" aria-label="Attach" title="Attach (not wired)">
-              ＋
-            </button>
+            <label className="sr-only" htmlFor="composer-model">Model</label>
+            <select
+              id="composer-model"
+              className="composer-tool composer-select"
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              title="Model"
+            >
+              {models.length === 0 && <option value="">model…</option>}
+              {models.slice(0, 200).map((row) => (
+                <option key={row.selector} value={row.selector}>
+                  {shortModel(row.selector)}
+                </option>
+              ))}
+            </select>
+            <label className="sr-only" htmlFor="composer-thinking">Thinking</label>
+            <select
+              id="composer-thinking"
+              className="composer-tool composer-select"
+              value={thinking}
+              onChange={(event) => setThinking(event.target.value)}
+              title="Thinking level"
+            >
+              {THINKING_LEVELS.map((level) => (
+                <option key={level} value={level}>
+                  ◒ {level}
+                </option>
+              ))}
+            </select>
+            <div className="composer-tool-group" role="group" aria-label="Run mode">
+              {RUN_MODES.map((entry) => (
+                <button
+                  key={entry.id || "agent"}
+                  type="button"
+                  className="composer-tool"
+                  aria-pressed={runMode === entry.id}
+                  title={entry.hint}
+                  onClick={() => setRunMode(runMode === entry.id ? "" : entry.id)}
+                >
+                  {entry.label}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               className="composer-tool"
@@ -516,9 +803,6 @@ export default function OmpDeck() {
             >
               Auto
             </button>
-            <span title={`model ${model || "loading"} · thinking ${thinking}`}>
-              {shortModel(model)} · {thinking}
-            </span>
           </div>
           <button className="send" type="submit" disabled={sending || !prompt.trim()} aria-label="Send">
             <span aria-hidden="true">↑</span>
@@ -562,76 +846,24 @@ export default function OmpDeck() {
 
         <section className="harness-picker" aria-labelledby="model-heading">
           <h2 id="model-heading">Model · {models.length || "…"}</h2>
-          <label className="sr-only" htmlFor="model">
-            Model
-          </label>
-          <select
-            id="model"
-            className="model-select"
-            value={model}
-            onChange={(event) => setModel(event.target.value)}
-          >
-            {models.length === 0 && <option value="">Loading models…</option>}
-            {[...grouped.entries()].map(([provider, rows]) => (
-              <optgroup key={provider || "?"} label={provider || "?"}>
-                {rows.map((row) => (
-                  <option key={row.selector} value={row.selector}>
-                    {row.name}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-          {(gateway || modelsError) && (
-            <p className="model-hint">
-              {gateway?.url ? (gateway.reachable ? "gateway reachable" : "gateway offline") : "gateway not configured"}
-              {modelsError ? <> · {modelsError}</> : null}
-            </p>
-          )}
+          <p className="model-hint">
+            Pick model + thinking in the composer below.
+            {(gateway || modelsError) && (
+              <>
+                {" "}
+                {gateway?.url ? (gateway.reachable ? "gateway reachable" : "gateway offline") : "gateway not configured"}
+                {modelsError ? <> · {modelsError}</> : null}
+              </>
+            )}
+          </p>
         </section>
 
         <section className="tool-picker" aria-labelledby="run-heading">
-          <h2 id="run-heading">Run options</h2>
-          <label className="tool-option">
-            <span aria-hidden="true">◒</span>
-            <span>
-              <b>Thinking</b>
-              <select
-                className="model-select"
-                value={thinking}
-                onChange={(event) => setThinking(event.target.value)}
-                aria-label="Thinking level"
-              >
-                {THINKING_LEVELS.map((level) => (
-                  <option key={level} value={level}>
-                    {level}
-                  </option>
-                ))}
-              </select>
-            </span>
-          </label>
-          <label className="tool-option">
-            <input
-              type="checkbox"
-              checked={advisor}
-              onChange={(event) => setAdvisor(event.target.checked)}
-            />
-            <span>
-              <b>Advisor</b>
-              <small>Passively reviews each turn</small>
-            </span>
-          </label>
-          <label className="tool-option">
-            <input
-              type="checkbox"
-              checked={autoApprove}
-              onChange={(event) => setAutoApprove(event.target.checked)}
-            />
-            <span>
-              <b>Auto-approve</b>
-              <small>Skip approval prompts</small>
-            </span>
-          </label>
+          <h2 id="run-heading">Defaults</h2>
+          <p className="model-hint">
+            Advisor {advisor ? "on" : "off"} · auto-approve {autoApprove ? "on" : "off"} · approval {approvalMode || "default"}.
+            Toggle per message in the composer.
+          </p>
         </section>
 
         <section className="tool-picker" aria-labelledby="about-heading">
@@ -696,16 +928,34 @@ export default function OmpDeck() {
                       )}
                       <div>
                         {message.role !== "system" && (
-                          <p className="message-author">{message.role === "assistant" ? "Oh My P(i)" : "You"}</p>
+                          <p className="message-author">
+                            {message.role === "assistant" ? "Oh My P(i)" : "You"}
+                            {message.cwd ? <span> · {message.cwd.split("/").pop()}</span> : null}
+                          </p>
                         )}
                         <p>{message.text}</p>
+                        {message.tools && message.tools.length > 0 && (
+                          <div className="tool-card" data-state="done">
+                            <div className="tool-head">
+                              <span className="gold-label">tool activity</span>
+                              <span>{message.tools.filter((tool) => tool.done).length}/{message.tools.length}</span>
+                            </div>
+                            {message.tools.map((tool) => (
+                              <div key={tool.id}>
+                                {tool.done ? (tool.ok ? "✓" : "✗") : "…"} {tool.name}
+                                {tool.intent ? ` — ${tool.intent}` : ""}
+                                {tool.summary ? ` · ${tool.summary}` : ""}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         {message.role === "assistant" && message.model && (
                           <p className="intro-detail">{message.model}</p>
                         )}
                       </div>
                     </li>
                   ))}
-                  {sending && (
+                  {sending && streamingText === "" && liveTools.length === 0 && (
                     <li className="message message-assistant" aria-label="Waiting for reply">
                       <span className="harness-mark" aria-hidden="true">
                         ⬢
