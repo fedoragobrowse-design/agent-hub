@@ -348,6 +348,12 @@ select.composer-tool.composer-select option { color: #202b43; }
 }
 .slash-item small { grid-column: 1 / -1; color: var(--omp-faint); font-size: 11px; }
 .slash-item.active, .slash-item:hover { background: oklch(100% 0 0 / 0.06); }
+.slash-menu { max-height: 320px; overflow-y: auto; }
+.slash-group { display: grid; gap: 2px; padding: 2px 0; }
+.slash-group + .slash-group { border-top: 1px solid var(--omp-border); padding-top: 6px; margin-top: 4px; }
+.slash-group-label { padding: 2px 10px; color: var(--omp-faint); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+.slash-item { grid-template-columns: 130px 1fr; }
+.slash-item span { color: var(--omp-muted); font-family: var(--font-mono); font-size: 11px; }
 .send {
   display: inline-flex;
   align-items: center;

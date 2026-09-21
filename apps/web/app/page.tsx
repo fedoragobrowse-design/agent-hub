@@ -91,19 +91,91 @@ const RUN_MODES = [
   { id: "prewalk", label: "Prewalk", hint: "cheap model after plan" },
 ] as const;
 
-type SlashEntry = { name: string; hint: string; detail: string };
+type SlashEntry = { name: string; hint: string; detail: string; passthrough?: boolean };
+const SLASH_CATS: Array<{ match: (n: string) => boolean; label: string }> = [
+  { match: (n) => ["/new","/fresh","/clear","/drop","/compact","/shake","/handoff","/resume","/retry","/rename","/move","/add-dir","/remove-dir","/dirs"].includes(n), label: "Session" },
+  { match: (n) => ["/model","/switch","/thinking"].includes(n), label: "Model" },
+  { match: (n) => ["/agents","/todo","/queue","/enqueue"].includes(n), label: "Agents" },
+  { match: (n) => ["/plan","/plan-review","/vibe","/goal","/guided-goal","/loop","/prewalk","/budget","/skillful","/extended-context","/computer","/fast"].includes(n), label: "Modes" },
+  { match: (n) => ["/share","/collab","/fork","/branch","/tree","/export"].includes(n), label: "Share" },
+  { match: (n) => n.startsWith("/marketplace")||["/discover","/install","/uninstall","/plugins","/reload-plugins"].includes(n), label: "Plugins" },
+];
+function slashCat(name: string): string {
+  for (const c of SLASH_CATS) if (c.match(name)) return c.label;
+  return "More";
+}
 const SLASH_COMMANDS: SlashEntry[] = [
+  // session + lifecycle — sent straight to OMP so behavior matches the TUI
+  { name: "/new", hint: "", detail: "Start a new session", passthrough: true },
+  { name: "/fresh", hint: "", detail: "Reset provider stream state, keep transcript", passthrough: true },
+  { name: "/clear", hint: "", detail: "Clear conversation context in place", passthrough: true },
+  { name: "/drop", hint: "", detail: "Delete current session, start new", passthrough: true },
+  { name: "/compact", hint: "[focus]", detail: "Manually compact session context", passthrough: true },
+  { name: "/shake", hint: "", detail: "Drop heavy content (tool results, large blocks)", passthrough: true },
+  { name: "/handoff", hint: "", detail: "Hand off context to a new session", passthrough: true },
+  { name: "/resume", hint: "<id>", detail: "Resume a different session", passthrough: true },
+  { name: "/retry", hint: "", detail: "Retry the last failed agent turn", passthrough: true },
+  { name: "/rename", hint: "[title]", detail: "Rename current session", passthrough: true },
+  { name: "/move", hint: "<dir>", detail: "Move session to a different directory", passthrough: true },
+  { name: "/add-dir", hint: "<dir>", detail: "Add a workspace directory (multi-root)", passthrough: true },
+  { name: "/remove-dir", hint: "<dir>", detail: "Remove a workspace directory", passthrough: true },
+  { name: "/dirs", hint: "", detail: "List session workspace directories", passthrough: true },
+  // model + thinking
   { name: "/model", hint: "<fuzzy>", detail: "Switch model: /model opus" },
-  { name: "/agents", hint: "", detail: "Show running / idle / parked agents" },
-  { name: "/compact", hint: "", detail: "Compact context now" },
-  { name: "/context", hint: "", detail: "Working directory + context usage" },
+  { name: "/switch", hint: "<fuzzy|@role>", detail: "Switch model, fuzzy ids or @role", passthrough: true },
   { name: "/thinking", hint: "<level>", detail: "off minimal low medium high xhigh max auto" },
-  { name: "/advisor", hint: "[on|off]", detail: "Toggle advisor runtime" },
+  // agents + todos
+  { name: "/agents", hint: "", detail: "Agents hub: per-agent model, prewalk, advisor", passthrough: true },
+  { name: "/todo", hint: "[sub]", detail: "View/modify todo list: edit copy expand collapse export import append start done drop rm", passthrough: true },
+  { name: "/queue", hint: "<msg>", detail: "Queue a message for after the agent yields", passthrough: true },
+  { name: "/enqueue", hint: "", detail: "Enqueue memory consolidation", passthrough: true },
+  // context + tools
+  { name: "/context", hint: "", detail: "Context usage breakdown", passthrough: true },
+  { name: "/tools", hint: "", detail: "Tools visible to the agent", passthrough: true },
+  { name: "/force", hint: "<tool>", detail: "Force next turn to use a tool", passthrough: true },
+  { name: "/mcp", hint: "[add|list|remove|test]", detail: "Manage MCP servers", passthrough: true },
+  // modes
+  { name: "/plan", hint: "", detail: "Toggle plan mode (plan before executing)", passthrough: true },
+  { name: "/plan-review", hint: "", detail: "Re-open latest plan review", passthrough: true },
+  { name: "/vibe", hint: "", detail: "Toggle vibe mode (fast persistent workers)", passthrough: true },
+  { name: "/goal", hint: "[set|show|pause|resume|drop]", detail: "Persistent autonomous objective", passthrough: true },
+  { name: "/guided-goal", hint: "", detail: "Agent interviews you, then sets goal", passthrough: true },
+  { name: "/loop", hint: "", detail: "Loop controls", passthrough: true },
+  { name: "/prewalk", hint: "", detail: "Arm one-shot model handoff", passthrough: true },
+  { name: "/budget", hint: "", detail: "Adjust token budget", passthrough: true },
+  { name: "/skillful", hint: "[on|off|status]", detail: "List skills in system prompt", passthrough: true },
+  { name: "/extended-context", hint: "[on|off]", detail: "Toggle extended context windows", passthrough: true },
+  { name: "/computer", hint: "[on|off|status]", detail: "Native computer-use prelude", passthrough: true },
+  { name: "/fast", hint: "[on|off|status]", detail: "Priority service tier", passthrough: true },
+  // advisor + memory
+  { name: "/advisor", hint: "[on|off|status]", detail: "Second model reviews each turn" },
+  { name: "/memory", hint: "[view|stats|diagnose|queue|sync|clear]", detail: "Memory maintenance", passthrough: true },
+  // share + collab
   { name: "/export", hint: "<path>", detail: "Export session to HTML" },
-  { name: "/share", hint: "", detail: "Share session via encrypted link" },
-  { name: "/fork", hint: "", detail: "Fork session branch" },
-  { name: "/resume", hint: "<id>", detail: "Resume session by id prefix" },
+  { name: "/share", hint: "", detail: "Share via encrypted link" },
+  { name: "/collab", hint: "[view|status|stop|join|leave]", detail: "Live shared session", passthrough: true },
+  { name: "/fork", hint: "", detail: "Fork from a previous message" },
+  { name: "/branch", hint: "", detail: "Rewind, keep old path as branch", passthrough: true },
+  { name: "/tree", hint: "", detail: "Navigate session tree", passthrough: true },
+  // plugins
+  { name: "/marketplace", hint: "[add|remove|update|list]", detail: "Manage marketplace sources", passthrough: true },
+  { name: "/discover", hint: "", detail: "Browse available plugins", passthrough: true },
+  { name: "/install", hint: "<plugin>", detail: "Install a plugin", passthrough: true },
+  { name: "/uninstall", hint: "<plugin>", detail: "Uninstall a plugin", passthrough: true },
+  { name: "/plugins", hint: "[list|enable|disable]", detail: "Manage installed plugins", passthrough: true },
+  { name: "/reload-plugins", hint: "", detail: "Reload skills, commands, hooks, tools, agents, MCP", passthrough: true },
+  // misc
+  { name: "/git", hint: "", detail: "Git UI: diff viewer, staging, commit", passthrough: true },
+  { name: "/session", hint: "[info|delete|pin|jobs]", detail: "Session management", passthrough: true },
+  { name: "/usage", hint: "", detail: "Provider usage and limits", passthrough: true },
+  { name: "/stats", hint: "", detail: "Local stats dashboard", passthrough: true },
+  { name: "/changelog", hint: "[full]", detail: "Changelog entries", passthrough: true },
+  { name: "/hotkeys", hint: "", detail: "Keyboard shortcuts", passthrough: true },
+  { name: "/cleanse", hint: "", detail: "Detect and fix project diagnostics", passthrough: true },
+  { name: "/debug", hint: "", detail: "Debug tools selector", passthrough: true },
   { name: "/help", hint: "", detail: "List commands" },
+  { name: "/exit", hint: "", detail: "Exit (web: start fresh)" },
+  { name: "/quit", hint: "", detail: "Quit (web: start fresh)" },
 ];
 const initialMessages: ChatMessage[] = [
   {
@@ -793,9 +865,18 @@ export default function OmpDeck() {
 
   const started = messages.length > 1 || sending;
   const empty = panel === "chat" && !started;
-  const slashMatches = prompt.startsWith("/") && !prompt.includes(" ")
-    ? SLASH_COMMANDS.filter((entry) => entry.name.startsWith(prompt.toLowerCase())).slice(0, 8)
-    : [];
+  const slashQuery = prompt.startsWith("/") ? prompt.slice(1).split(/\s/)[0]?.toLowerCase() ?? "" : "";
+  const slashMatches =
+    prompt.startsWith("/") && slashQuery.length > 0
+      ? [
+          ...SLASH_COMMANDS.filter((entry) => entry.name.slice(1).startsWith(slashQuery)),
+          ...SLASH_COMMANDS.filter(
+            (entry) => !entry.name.slice(1).startsWith(slashQuery) && (entry.name.includes(slashQuery) || entry.detail.toLowerCase().includes(slashQuery)),
+          ),
+        ].slice(0, 10)
+      : prompt === "/"
+        ? SLASH_COMMANDS.slice(0, 10)
+        : [];
   const composer = (
     <form
       className="composer"
@@ -822,11 +903,22 @@ export default function OmpDeck() {
       {(cwdPicker || browser) && (
         <div className="prompt-box file-browser" role="dialog" aria-label="File browser">
           <b>{browser?.dir ?? cwd}</b>
+          <div className="row-actions">
+            <button
+              type="button"
+              className="primary"
+              disabled={!browser?.dir || browser.dir === cwd}
+              onClick={() => { if (browser?.dir) { setCwd(browser.dir); setCwdPicker(null); setBrowser(null); setDiffView(null); } }}
+              title="Work in the folder shown above"
+            >
+              ✓ Use this folder
+            </button>
+          </div>
           {browser?.git?.isRepo && (
             <small> · {browser.git.branch} · {browser.git.unstaged.length + browser.git.staged.length} changed</small>
           )}
           <div className="browser-entries">
-            <button type="button" onClick={() => { const parent = browser?.parent ?? cwdPicker?.parent; if (parent) { setCwd(parent); void openBrowser(parent); } }}>
+            <button type="button" onClick={() => { const parent = browser?.parent ?? cwdPicker?.parent; if (parent) void openBrowser(parent); }}>
               ↑ parent
             </button>
             {(browser?.entries ?? []).slice(0, 40).map((entry) => (
@@ -834,7 +926,7 @@ export default function OmpDeck() {
                 <button
                   key={entry.path}
                   type="button"
-                  onClick={() => { setCwd(entry.path); void openBrowser(entry.path); }}
+                  onClick={() => void openBrowser(entry.path)}
                   title={entry.path}
                 >
                   📁 {entry.name}
@@ -876,6 +968,13 @@ export default function OmpDeck() {
           {diffView && (
             <pre className="diff-view">{diffView.slice(0, 4000)}</pre>
           )}
+          <form
+            className="row-actions"
+            onSubmit={(event) => { event.preventDefault(); const input = new FormData(event.currentTarget).get("path"); if (typeof input === "string" && input.trim()) void openBrowser(input.trim()); }}
+          >
+            <input name="path" className="model-select" placeholder="/home/user/project…" aria-label="Go to path" style={{ flex: 1 }} />
+            <button type="submit">Go</button>
+          </form>
           <div className="prompt-actions">
             <button type="button" onClick={() => { setCwdPicker(null); setBrowser(null); setDiffView(null); }}>
               Close
@@ -905,7 +1004,7 @@ export default function OmpDeck() {
           onChange={(event) => {
             const next = event.target.value;
             setPrompt(next);
-            const isSlash = next.startsWith("/") && !next.includes(" ");
+            const isSlash = next.startsWith("/");
             setSlashOpen(isSlash);
             setSlashIndex(0);
           }}
@@ -917,6 +1016,10 @@ export default function OmpDeck() {
               event.preventDefault();
               const pick = slashMatches[slashIndex];
               if (pick) setPrompt(`${pick.name} `);
+              setSlashOpen(false);
+            } else if (slashOpen && slashMatches.length > 0 && event.key === "Enter" && !event.shiftKey && slashMatches[slashIndex] && prompt.trim() === slashMatches[slashIndex]?.name) {
+              event.preventDefault();
+              setPrompt(`${slashMatches[slashIndex]?.name} `);
               setSlashOpen(false);
             } else if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
@@ -933,19 +1036,34 @@ export default function OmpDeck() {
         />
         {slashOpen && slashMatches.length > 0 && (
           <div className="slash-menu" role="listbox" aria-label="Slash commands">
-            {slashMatches.map((entry, index) => (
-              <button
-                key={entry.name}
-                type="button"
-                role="option"
-                aria-selected={index === slashIndex}
-                className={index === slashIndex ? "slash-item active" : "slash-item"}
-                onClick={() => { setPrompt(`${entry.name} `); setSlashOpen(false); }}
-              >
-                <b>{entry.name}</b> <span>{entry.hint}</span>
-                <small>{entry.detail}</small>
-              </button>
-            ))}
+            {(() => {
+              const groups = new Map<string, Array<{ entry: (typeof slashMatches)[number]; index: number }>>();
+              slashMatches.forEach((entry, index) => {
+                const cat = slashCat(entry.name);
+                const list = groups.get(cat) ?? [];
+                list.push({ entry, index });
+                groups.set(cat, list);
+              });
+              return [...groups.entries()].map(([cat, items]) => (
+                <div key={cat} className="slash-group">
+                  <div className="slash-group-label">{cat}</div>
+                  {items.map(({ entry, index }) => (
+                    <button
+                      key={entry.name}
+                      type="button"
+                      role="option"
+                      aria-selected={index === slashIndex}
+                      className={index === slashIndex ? "slash-item active" : "slash-item"}
+                      onMouseEnter={() => setSlashIndex(index)}
+                      onClick={() => { setPrompt(`${entry.name} `); setSlashOpen(false); }}
+                    >
+                      <b>{entry.name}</b> <span>{entry.hint}</span>
+                      <small>{entry.detail}</small>
+                    </button>
+                  ))}
+                </div>
+              ));
+            })()}
           </div>
         )}
         {(streamingText || liveTools.length > 0 || thinkingPreview) && (
@@ -972,10 +1090,14 @@ export default function OmpDeck() {
               title={model || "Model"}
             >
               {models.length === 0 && <option value="">model…</option>}
-              {models.slice(0, 200).map((row) => (
-                <option key={row.selector} value={row.selector} title={row.selector}>
-                  {row.selector}
-                </option>
+              {[...grouped.entries()].slice(0, 40).map(([provider, rows]) => (
+                <optgroup key={provider || "?"} label={provider || "?"}>
+                  {rows.slice(0, 30).map((row) => (
+                    <option key={row.selector} value={row.selector} title={row.selector}>
+                      {row.name}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
             <label className="sr-only" htmlFor="composer-thinking">Thinking</label>
