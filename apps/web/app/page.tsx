@@ -32,7 +32,7 @@ type PanelId =
   | "skills"
   | "settings";
 
-type McpServer = { type?: unknown; command?: unknown; args?: unknown; cwd?: unknown };
+type McpServer = { type?: unknown; command?: unknown; args?: unknown; cwd?: unknown; description?: unknown; source?: unknown };
 type SkillRow = { name: string; description: string; path: string; source: string };
 type SessionRow = { id: string; path: string; title: string; updatedAt: string };
 type ConfigField = { value: unknown; type: string; options?: string[] };
@@ -51,6 +51,7 @@ type GatewayState = {
   error?: string;
 };
 type PluginList = { npm?: unknown; marketplace?: unknown };
+type LocalGateway = { running: boolean; pid?: number; url: string | null; managed: boolean; error?: string };
 
 const PANELS: Array<{ id: PanelId; mark: string; label: string; hint: string }> = [
   { id: "chat", mark: "π", label: "Chat", hint: "buffered reply via omp" },
@@ -139,6 +140,78 @@ function displayValue(value: unknown): string {
   }
 }
 
+type FriendlyProps = {
+  groups: ConfigGroups;
+  onSet: (key: string, value: string) => void;
+};
+
+function getVal(groups: ConfigGroups, key: string): unknown {
+  for (const entries of Object.values(groups)) {
+    if (key in entries) return entries[key]?.value;
+  }
+  return undefined;
+}
+
+function FriendlySettings({ groups, onSet }: FriendlyProps) {
+  const theme = asString(getVal(groups, "theme.dark"));
+  const shape = asString(getVal(groups, "composer.shape"));
+  const thinking = asString(getVal(groups, "defaultThinkingLevel"));
+  const approval = asString(getVal(groups, "tools.approvalMode"));
+  const editMode = asString(getVal(groups, "edit.mode"));
+  return (
+    <div className="panel-list">
+      <div className="panel-row">
+        <b>Appearance</b>
+        <small>Theme · composer shape</small>
+        <div className="row-actions">
+          <label>Theme <code>{theme || "—"}</code></label>
+        </div>
+        <div className="row-actions">
+          <span>Composer</span>
+          {(["box", "minimal", "bordered"] as const).map((opt) => (
+            <button key={opt} type="button" disabled={shape === opt} onClick={() => onSet("composer.shape", opt)} aria-pressed={shape === opt}>
+              {opt}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="panel-row">
+        <b>Thinking default</b>
+        <small>Current: {thinking || "—"}</small>
+        <div className="row-actions">
+          {(["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"] as const).map((opt) => (
+            <button key={opt} type="button" disabled={thinking === opt} onClick={() => onSet("defaultThinkingLevel", opt)} aria-pressed={thinking === opt}>
+              {opt}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="panel-row">
+        <b>Approvals</b>
+        <small>Tool approval mode</small>
+        <div className="row-actions" role="radiogroup" aria-label="Approval mode">
+          {(["always-ask", "write", "yolo"] as const).map((opt) => (
+            <button key={opt} type="button" disabled={approval === opt} onClick={() => onSet("tools.approvalMode", opt)} aria-pressed={approval === opt}>
+              {opt}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="panel-row">
+        <b>Edit mode</b>
+        <small>How file edits apply · current: {editMode || "—"}</small>
+        <div className="row-actions">
+          {(["hashline", "apply_patch", "patch", "replace", "sloppy"] as const).map((opt) => (
+            <button key={opt} type="button" disabled={editMode === opt} onClick={() => onSet("edit.mode", opt)} aria-pressed={editMode === opt}>
+              {opt}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function OmpDeck() {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [prompt, setPrompt] = useState("");
@@ -181,6 +254,8 @@ export default function OmpDeck() {
   const [usage, setUsage] = useState<UsageReport | null>(null);
   const [usageError, setUsageError] = useState<string | null>(null);
   const [gatewayInfo, setGatewayInfo] = useState<GatewayState | null>(null);
+  const [localGateway, setLocalGateway] = useState<LocalGateway | null>(null);
+  const [gatewayBusy, setGatewayBusy] = useState(false);
   const [ops, setOps] = useState<OpsState | null>(null);
   const [opsNote, setOpsNote] = useState<string | null>(null);
   const [mcp, setMcp] = useState<Record<string, McpServer> | null>(null);
@@ -200,6 +275,7 @@ export default function OmpDeck() {
   const [configGroups, setConfigGroups] = useState<ConfigGroups | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
   const [configMsg, setConfigMsg] = useState<string | null>(null);
+  const [settingsTab, setSettingsTab] = useState<"friendly" | "advanced">("friendly");
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [modelRoles, setModelRoles] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -266,10 +342,12 @@ export default function OmpDeck() {
       } else if (id === "gateway" && !gatewayInfo) {
         const data = await api<GatewayState>("/api/omp/gateway");
         setGatewayInfo(data);
+        try {
+          setLocalGateway(await api<LocalGateway>("/api/omp/gateway/local"));
+        } catch {
+          // Local gateway probe optional.
+        }
       } else if (id === "tools" && !ops) {
-        const data = await api<OpsState>("/api/omp/ops");
-        setOps({ processes: data.processes, worktrees: data.worktrees, collab: data.collab });
-        setOpsNote(typeof data.note === "string" ? data.note : null);
       } else if (id === "mcp" && !mcp && !mcpError) {
         const data = await api<{ servers?: Record<string, McpServer> }>("/api/omp/mcp");
         setMcp(data.servers ?? {});
@@ -330,11 +408,23 @@ export default function OmpDeck() {
     const name = match[1]?.toLowerCase() ?? "";
     const args = (match[2] ?? "").trim();
     if (name === "model" && args) {
-      const hit = models.find(
-        (row) => row.selector === args || row.selector.endsWith(`/${args}`) || row.name === args,
+      const needle = args.toLowerCase();
+      const hits = models.filter(
+        (row) =>
+          row.selector.toLowerCase() === needle ||
+          row.selector.toLowerCase().endsWith(`/${needle}`) ||
+          row.name.toLowerCase() === needle ||
+          row.selector.toLowerCase().includes(needle),
       );
-      setModel(hit ? hit.selector : args);
-      setNotice(hit ? `Model → ${hit.selector}.` : `Model → ${args} (sent as fuzzy match).`);
+      if (hits.length === 1 && hits[0]) {
+        setModel(hits[0].selector);
+        setNotice(`Model → ${hits[0].selector}.`);
+      } else if (hits.length > 1) {
+        setNotice(`Multiple matches: ${hits.slice(0, 5).map((row) => row.selector).join(", ")} — be more specific.`);
+      } else {
+        setModel(args);
+        setNotice(`Model → ${args} (sent as fuzzy match).`);
+      }
       setPrompt("");
       return true;
     }
@@ -494,6 +584,26 @@ export default function OmpDeck() {
       setModels(data.models ?? []);
     } catch (error) {
       setModelsError(error instanceof Error ? error.message : "Model search failed.");
+    }
+  }
+
+  async function toggleGateway() {
+    setGatewayBusy(true);
+    try {
+      const action = localGateway?.running ? "stop" : "start";
+      const data = await api<LocalGateway>("/api/omp/gateway/local", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      setLocalGateway(data);
+      setGatewayInfo(null);
+      const remote = await api<GatewayState>("/api/omp/gateway");
+      setGatewayInfo(remote);
+    } catch (error) {
+      setLocalGateway((prev) => ({ running: prev?.running ?? false, url: prev?.url ?? null, managed: false, error: error instanceof Error ? error.message : "Gateway action failed." }));
+    } finally {
+      setGatewayBusy(false);
     }
   }
 
@@ -748,12 +858,12 @@ export default function OmpDeck() {
               className="composer-tool composer-select"
               value={model}
               onChange={(event) => setModel(event.target.value)}
-              title="Model"
+              title={model || "Model"}
             >
               {models.length === 0 && <option value="">model…</option>}
               {models.slice(0, 200).map((row) => (
-                <option key={row.selector} value={row.selector}>
-                  {shortModel(row.selector)}
+                <option key={row.selector} value={row.selector} title={row.selector}>
+                  {row.selector}
                 </option>
               ))}
             </select>
@@ -950,7 +1060,18 @@ export default function OmpDeck() {
                           </div>
                         )}
                         {message.role === "assistant" && message.model && (
-                          <p className="intro-detail">{message.model}</p>
+                          <p className="model-sublabel">{message.model}</p>
+                        )}
+                        {message.role === "assistant" && message.text && (
+                          <div className="row-actions">
+                            <button
+                              type="button"
+                              className="copy-btn"
+                              onClick={() => void navigator.clipboard.writeText(message.text).catch(() => setNotice("Copy failed — select the text manually."))}
+                            >
+                              Copy
+                            </button>
+                          </div>
                         )}
                       </div>
                     </li>
@@ -1189,6 +1310,17 @@ export default function OmpDeck() {
             </div>
             <div className="panel-list">
               <div className="panel-row">
+                <b>Local gateway {localGateway?.running ? "· running" : "· stopped"}</b>
+                <code>{localGateway?.url ?? "http://127.0.0.1:4000"}{localGateway?.pid ? ` · pid ${localGateway.pid}` : ""}</code>
+                {localGateway?.error && <small>{localGateway.error}</small>}
+                <small>Spawns `omp auth-gateway serve` on loopback. Needs a configured broker or it exits.</small>
+                <div className="row-actions">
+                  <button type="button" disabled={gatewayBusy} onClick={() => void toggleGateway()}>
+                    {gatewayBusy ? "Working…" : localGateway?.running ? "Stop gateway" : "Start gateway"}
+                  </button>
+                </div>
+              </div>
+              <div className="panel-row">
                 <b>Gateway</b>
                 <code>{gateway?.url ?? "not configured"}</code>
                 <small>{gateway?.reachable ? "reachable" : "offline"}</small>
@@ -1268,7 +1400,7 @@ export default function OmpDeck() {
                 Working with <strong>MCP</strong>.
               </p>
               <h1>Servers.</h1>
-              <p className="intro-detail">Read from ~/.omp/agent/mcp.json.</p>
+              <p className="intro-detail">mcp.json plus every installed plugin recipe.</p>
             </div>
             {mcpError && (
               <div className="alert-box" role="alert">
@@ -1284,10 +1416,12 @@ export default function OmpDeck() {
                   <div className="panel-row" key={name}>
                     <b>{name}</b>
                     <code>
-                      {asString(server.type) || "?"} · {asString(server.command) || "?"}{" "}
+                      {asString(server.type) || asString(server.command) || "?"} · {asString(server.command) || "?"}{" "}
                       {Array.isArray(server.args) ? server.args.map((arg) => String(arg)).join(" ") : ""}
                     </code>
                     {asString(server.cwd) && <small>cwd: {asString(server.cwd)}</small>}
+                    {asString(server.description) && <small>{asString(server.description)}</small>}
+                    {asString(server.source) && <small>source: {asString(server.source)}</small>}
                   </div>
                 ))}
               {mcp && Object.keys(mcp).length === 0 && (
@@ -1467,7 +1601,15 @@ export default function OmpDeck() {
                 Working with <strong>Settings</strong>.
               </p>
               <h1>OMP config.</h1>
-              <p className="intro-detail">Secrets render ******** and are not editable. Internal is read-only.</p>
+              <p className="intro-detail">Everyday controls up top; every raw key under Advanced.</p>
+            </div>
+            <div className="panel-actions" role="tablist" aria-label="Settings view">
+              <button type="button" role="tab" aria-selected={settingsTab === "friendly"} onClick={() => setSettingsTab("friendly")} disabled={settingsTab === "friendly"}>
+                Friendly
+              </button>
+              <button type="button" role="tab" aria-selected={settingsTab === "advanced"} onClick={() => setSettingsTab("advanced")} disabled={settingsTab === "advanced"}>
+                Advanced
+              </button>
             </div>
             {configError && (
               <div className="alert-box" role="alert">
@@ -1479,7 +1621,10 @@ export default function OmpDeck() {
                 {configMsg}
               </div>
             )}
-            {configGroups &&
+            {settingsTab === "friendly" && configGroups && (
+              <FriendlySettings groups={configGroups} onSet={(key, value) => void setConfigKey(key, value)} />
+            )}
+            {settingsTab === "advanced" && configGroups &&
               Object.entries(configGroups).map(([group, entries]) => (
                 <section key={group} aria-label={`${group} settings`}>
                   <h2 className="gold-label">{group}</h2>

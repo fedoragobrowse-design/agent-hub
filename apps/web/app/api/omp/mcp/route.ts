@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
-import { readMcpServers, writeMcpServers } from "@/lib/omp";
+import { readMcpServers, readMcpServersDetailed, writeMcpServers } from "@/lib/omp";
 
 export async function GET() {
   try {
-    const servers = await readMcpServers();
+    const detailed = await readMcpServersDetailed();
+    const servers: Record<string, unknown> = {};
+    for (const [name, entry] of Object.entries(detailed)) {
+      servers[name] = { ...(entry.config as Record<string, unknown>), source: entry.source };
+    }
     return NextResponse.json({ servers });
   } catch (error) {
     return NextResponse.json(

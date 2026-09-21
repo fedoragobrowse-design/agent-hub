@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -327,6 +327,70 @@ export async function gatewayModels(): Promise<unknown> {
   return res.json() as Promise<unknown>;
 }
 
+export type LocalGatewayState = {
+  running: boolean;
+  pid?: number;
+  url: string | null;
+  managed: boolean;
+};
+
+let gatewayChild: ChildProcess | null = null;
+
+function gatewayPort(): string {
+  return process.env["OMP_GATEWAY_PORT"] ?? "4000";
+}
+
+export function localGatewayUrl(): string {
+  if (process.env["OMP_GATEWAY_URL"]) return process.env["OMP_GATEWAY_URL"];
+  return `http://127.0.0.1:${gatewayPort()}`;
+}
+
+async function probeGateway(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${url.replace(/\/$/, "")}/healthz`, { signal: AbortSignal.timeout(2000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function localGatewayState(): Promise<LocalGatewayState> {
+  const url = localGatewayUrl();
+  if (gatewayChild?.pid && !gatewayChild.killed) {
+    return { running: await probeGateway(url), pid: gatewayChild.pid, url, managed: true };
+  }
+  gatewayChild = null;
+  return { running: await probeGateway(url), pid: undefined, url, managed: false };
+}
+
+export async function startLocalGateway(): Promise<LocalGatewayState> {
+  const existing = await localGatewayState();
+  if (existing.running) return existing;
+  gatewayChild = spawn("omp", ["auth-gateway", "serve", `--bind=127.0.0.1:${gatewayPort()}`, "--no-auth"], {
+    stdio: "ignore",
+    detached: true,
+  });
+  gatewayChild.unref();
+  const url = localGatewayUrl();
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    if (await probeGateway(url)) {
+      return { running: true, pid: gatewayChild.pid, url, managed: true };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("Local gateway did not become reachable on " + url + ". Is a broker configured?");
+}
+
+export async function stopLocalGateway(): Promise<LocalGatewayState> {
+  if (gatewayChild && !gatewayChild.killed) {
+    gatewayChild.kill("SIGTERM");
+  }
+  gatewayChild = null;
+  const url = localGatewayUrl();
+  return { running: await probeGateway(url), pid: undefined, url, managed: false };
+}
+
 export async function getUsageReport(): Promise<unknown> {
   const raw = await runOmp(["usage", "--json"]);
   return JSON.parse(raw) as unknown;
@@ -551,16 +615,56 @@ export async function listSessions(): Promise<OmpSession[]> {
   return sessions;
 }
 
+export type McpServerEntry = { config: unknown; source: string; path: string };
+
 export async function readMcpServers(): Promise<Record<string, unknown>> {
+  const aggregated = await readMcpServersDetailed();
+  const out: Record<string, unknown> = {};
+  for (const [name, entry] of Object.entries(aggregated)) out[name] = entry.config;
+  return out;
+}
+
+export async function readMcpServersDetailed(): Promise<Record<string, McpServerEntry>> {
+  const servers: Record<string, McpServerEntry> = {};
   const file = path.join(agentDir(), "mcp.json");
   try {
     const raw = await fs.readFile(file, "utf8");
     const parsed = JSON.parse(raw) as { mcpServers?: Record<string, unknown> };
-    return parsed.mcpServers ?? {};
+    for (const [name, config] of Object.entries(parsed.mcpServers ?? {})) {
+      servers[name] = { config, source: "mcp.json", path: file };
+    }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
-    throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+  const pluginCache = path.join(os.homedir(), ".omp", "plugins", "cache", "plugins");
+  let pluginDirs: string[];
+  try {
+    pluginDirs = await fs.readdir(pluginCache);
+  } catch {
+    pluginDirs = [];
+  }
+  for (const dir of pluginDirs) {
+    const mcpDir = path.join(pluginCache, dir, "mcp");
+    let files: string[];
+    try {
+      files = await fs.readdir(mcpDir);
+    } catch {
+      continue;
+    }
+    for (const name of files.filter((entry) => entry.endsWith(".json"))) {
+      const full = path.join(mcpDir, name);
+      try {
+        const recipe = JSON.parse(await fs.readFile(full, "utf8")) as { command?: unknown } & Record<string, unknown>;
+        if (!recipe.command) continue;
+        const serverName = path.basename(name, ".json");
+        const key = servers[serverName] ? `${serverName} (${dir.split("___")[0]})` : serverName;
+        servers[key] = { config: recipe, source: `plugin ${dir}`, path: full };
+      } catch {
+        continue;
+      }
+    }
+  }
+  return servers;
 }
 
 export async function writeMcpServers(): Promise<never> {
@@ -589,6 +693,15 @@ function parseFrontmatter(text: string): Record<string, string> {
 
 export async function listSkills(): Promise<{ skills: SkillInfo[]; rulesEnabled: boolean }> {
   const roots: Array<{ dir: string; source: string }> = [{ dir: path.join(agentDir(), "skills"), source: "omp" }];
+  const pluginCache = path.join(os.homedir(), ".omp", "plugins", "cache", "plugins");
+  try {
+    const pluginDirs = await fs.readdir(pluginCache);
+    for (const dir of pluginDirs) {
+      roots.push({ dir: path.join(pluginCache, dir, "skills"), source: `plugin ${dir.split("___")[0]}` });
+    }
+  } catch {
+    // No plugin cache: user skills only.
+  }
   const skills: SkillInfo[] = [];
   for (const { dir, source } of roots) {
     let entries: string[];
@@ -598,7 +711,22 @@ export async function listSkills(): Promise<{ skills: SkillInfo[]; rulesEnabled:
       continue;
     }
     for (const name of entries) {
-      const skillFile = path.join(dir, name, "SKILL.md");
+      const candidates = [
+        path.join(dir, name, "SKILL.md"),
+        path.join(dir, name, name, "SKILL.md"),
+        path.join(dir, "SKILL.md"),
+      ];
+      let skillFile: string | null = null;
+      for (const candidate of candidates) {
+        try {
+          await fs.access(candidate);
+          skillFile = candidate;
+          break;
+        } catch {
+          continue;
+        }
+      }
+      if (!skillFile) continue;
       try {
         const text = await fs.readFile(skillFile, "utf8");
         const front = parseFrontmatter(text);
