@@ -1,0 +1,6 @@
+# Optional GitHub OAuth credentials for the installed desktop application.
+# Create a GitHub OAuth App with callback URL http://127.0.0.1:3010/api/auth/callback/github,
+# then set these values and restart Agent Hub.
+AUTH_GITHUB_ID=
+AUTH_GITHUB_SECRET=
+AUTH_SECRET=

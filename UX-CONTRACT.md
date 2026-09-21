@@ -2,13 +2,12 @@
 
 | Capability | Canonical owner | Source of truth | Allowed variants | Verification |
 | --- | --- | --- | --- | --- |
-| Run composer | `RunComposer` | This contract | Hosted or local bridge | Form and API contract tests |
-| Form | `RunComposer` | This contract | Prompt field and runner selectors | Validation and keyboard tests |
-| Timeline | `RunTimeline` | This contract | Idle, live, failed, cancelled | Keyboard and stream-state tests |
-| Extension approval | `ApprovalCard` | `packages/security` | Local or hosted scope | Digest mismatch test |
-| Toast/status | `StatusNotice` | This contract | Polite success; inline recovery error | Live-region test |
-| Scrollbars | `globals.css` | `DESIGN.md` | Stable gutter on log panel | Computed-style check |
-| Toast | `StatusNotice` | This contract | Polite success; inline recovery error | Live-region test |
-| Scrollbar | `globals.css` | `DESIGN.md` | Stable gutter on log panel | Computed-style check |
+| Harness selection | `FlightDeck` | `HarnessId` in `packages/contracts` | Codex, OpenCode, Oh My P(i), Claude Code | Button pressed state and draft routing |
+| Conversation | `FlightDeck` | Local `ChatMessage` state | Harness, user, and system messages | Message order and accessible live region |
+| Draft composer | `FlightDeck` | Prompt and selected artifacts | Local bridge or hosted target | Empty prompt recovery and cleared sent draft |
+| Allowed tools | `FlightDeck` | `catalogFixtures` | Approved fixture artifacts | Checkbox state and attachment count |
+| Marketplace | `FlightDeck` | `catalogFixtures` and compatibility matrix | Add/remove supported extensions per selected harness | Marketplace trigger, support label, and attachment state |
+| Execution boundary | `FlightDeck` | Connected API/bridge availability | Draft only until connected | Explicit no-execution message |
+| Authentication | `apps/web/auth.ts` | NextAuth session | GitHub sign-in/sign-out | Session control and protected route |
 
-Runs use pessimistic mutation feedback: the UI only shows a submitted run after the API accepts it. Cancellation is idempotent. Deleting logs requires confirmation in the production API; no client-side deletion is irreversible by itself.
+The UI must show a harness-specific draft only after the user chooses a harness. A draft is not an execution: without a connected managed API and bridge or runner, it must state that it has not run. Switching harnesses applies only to future drafts. Tool selection is explicit and visible at send time.

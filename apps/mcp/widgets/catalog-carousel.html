@@ -1,0 +1,85 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="color-scheme" content="light dark" />
+<style>
+  :root {
+    --ink: var(--color-text-primary, #202b43);
+    --sub: var(--color-text-secondary, #5a6270);
+    --line: var(--color-border-default, #dbe2ef);
+    --panel: var(--color-surface-primary, #fbfcff);
+    --route: #3157b7;
+  }
+  html, body { background: transparent; color: var(--ink); }
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; }
+  ul { list-style: none; padding: 0; margin: 0; max-height: 300px; overflow-y: auto; }
+  li { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; background: var(--panel); }
+  .row { display: flex; gap: 8px; align-items: baseline; }
+  .row b { font-size: 14px; }
+  .kind { margin-left: auto; font-size: 12px; color: var(--sub); }
+  .sub { color: var(--sub); font-size: 12px; }
+  .support { font-size: 12px; font-weight: 600; }
+  .support.native { color: #1c6b3c; }
+  .support.adapted { color: #8a6d00; }
+  .support.unsupported { color: #a33; }
+  .actions { display: flex; gap: 8px; margin-top: 8px; }
+  button { font: inherit; padding: 6px 12px; cursor: pointer; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--ink); }
+  button.primary { background: var(--route); border-color: var(--route); color: #fff; }
+</style>
+<div class="rail" id="rail"></div>
+<ul id="list"></ul>
+<script type="module">
+/*__EXT_APPS_BUNDLE__*/
+const { App, applyHostStyleVariables } = globalThis.ExtApps;
+(async () => {
+  const app = new App({ name: "CatalogCarousel", version: "1.0.0" }, { autoResize: true });
+  const ul = document.getElementById("list");
+
+  function applyHostContext(ctx) {
+    document.documentElement.classList.toggle("dark", ctx?.theme === "dark");
+    if (ctx?.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
+  }
+  app.onhostcontextchanged = applyHostContext;
+
+  app.ontoolresult = ({ content }) => {
+    const text = content[0].text;
+    const jsonStart = text.indexOf("\n\n");
+    const payload = JSON.parse(jsonStart === -1 ? text : text.slice(jsonStart + 2));
+    const items = payload.items ?? payload.artifacts ?? [];
+    ul.innerHTML = "";
+    scrollTo({ top: 0 });
+    for (const it of items) {
+      const li = document.createElement("li");
+      const support = document.createElement("span");
+      support.className = `support ${it.support ?? ""}`;
+      support.textContent = it.support ?? "";
+      li.innerHTML = `<div class="row"><b></b><span class="kind"></span></div><div class="sub"></div>`;
+      li.querySelector("b").textContent = it.name;
+      li.querySelector(".kind").textContent = `${it.kind} · ${it.version}`;
+      li.querySelector(".sub").textContent = `${it.id} · ${it.digest}`;
+      li.querySelector(".row").append(support);
+      if (it.note) {
+        const note = document.createElement("p");
+        note.className = "sub";
+        note.style.borderLeft = "3px solid #f1c148";
+        note.style.padding = "2px 8px";
+        note.textContent = it.note;
+        li.append(note);
+      }
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      const plan = document.createElement("button");
+      plan.className = "primary";
+      plan.textContent = "Plan install";
+      plan.addEventListener("click", () => {
+        app.sendMessage({ role: "user", content: [{ type: "text", text: `Plan install of ${it.id} on the current harness.` }] });
+      });
+      actions.append(plan);
+      li.append(actions);
+      ul.append(li);
+    }
+  };
+
+  await app.connect();
+  applyHostContext(app.getHostContext());
+})();
+</script>

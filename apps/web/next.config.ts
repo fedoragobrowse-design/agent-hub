@@ -1,3 +1,3 @@
 import type { NextConfig } from "next";
-const nextConfig: NextConfig = { transpilePackages: ["@agent-hub/contracts", "@agent-hub/catalog"] };
+const nextConfig: NextConfig = {};
 export default nextConfig;

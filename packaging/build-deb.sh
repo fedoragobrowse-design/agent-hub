@@ -7,6 +7,8 @@ VERSION="${VERSION:-0.1.0}"
 STAGE="$ROOT/.package-stage/agent-hub_${VERSION}_amd64"
 BUN_BIN="${BUN_BIN:?Set BUN_BIN to the Bun executable used for packaging}"
 UPDATE_REPOSITORY="${UPDATE_REPOSITORY:-}"
+"$BUN_BIN" run --cwd "$ROOT/apps/web" build
+"$BUN_BIN" run --cwd "$ROOT/apps/desktop" typecheck
 
 rm -rf "$STAGE"
 rm -f "$OUT/agent-hub_${VERSION}_amd64.deb"
@@ -16,6 +18,7 @@ chmod 0644 "$STAGE/DEBIAN/control"
 install -m 0755 "$ROOT/packaging/debian/postinst" "$STAGE/DEBIAN/postinst"
 install -m 0755 "$ROOT/packaging/debian/agent-hub" "$STAGE/usr/bin/agent-hub"
 install -m 0755 "$ROOT/packaging/debian/agent-hub-desktop" "$STAGE/usr/bin/agent-hub-desktop"
+install -m 0644 "$ROOT/packaging/debian/environment" "$STAGE/usr/lib/agent-hub/environment"
 install -m 0644 "$ROOT/packaging/debian/agent-hub.desktop" "$STAGE/usr/share/applications/agent-hub.desktop"
 install -m 0755 "$ROOT/packaging/ota/agent-hub-update" "$STAGE/usr/lib/agent-hub/bin/agent-hub-update"
 install -m 0644 "$ROOT/packaging/ota/agent-hub-update.service" "$STAGE/lib/systemd/system/agent-hub-update.service"

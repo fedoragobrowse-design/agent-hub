@@ -1,0 +1,69 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="color-scheme" content="light dark" />
+<style>
+  :root {
+    --ink: var(--color-text-primary, #202b43);
+    --sub: var(--color-text-secondary, #5a6270);
+    --line: var(--color-border-default, #dbe2ef);
+    --panel: var(--color-surface-primary, #fbfcff);
+    --danger: #a33;
+  }
+  html, body { background: transparent; color: var(--ink); }
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; }
+  .card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 12px 14px; }
+  code { font-family: ui-monospace, monospace; font-size: 12px; }
+  .digest { color: var(--sub); font-size: 12px; word-break: break-all; }
+  ul { margin: 8px 0; padding-left: 18px; }
+  .actions { display: flex; gap: 8px; margin-top: 12px; }
+  button { font: inherit; padding: 8px 16px; cursor: pointer; border-radius: 6px; }
+  button.primary { background: var(--danger); color: #fff; border: none; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--ink); }
+</style>
+<div class="card">
+  <p><b id="title">Approve install</b></p>
+  <p class="digest" id="detail"></p>
+  <ul id="commands"></ul>
+  <div class="actions">
+    <button id="cancel" class="ghost" type="button">Cancel</button>
+    <button id="confirm" class="primary" type="button">Approve and install</button>
+  </div>
+</div>
+<script type="module">
+/*__EXT_APPS_BUNDLE__*/
+const { App, applyHostStyleVariables } = globalThis.ExtApps;
+(async () => {
+  const app = new App({ name: "ApprovalConfirm", version: "1.0.0" }, { autoResize: true });
+
+  function applyHostContext(ctx) {
+    document.documentElement.classList.toggle("dark", ctx?.theme === "dark");
+    if (ctx?.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
+  }
+  app.onhostcontextchanged = applyHostContext;
+
+  app.ontoolresult = ({ content }) => {
+    const plan = JSON.parse(content[0].text);
+    document.getElementById("title").textContent = `Approve ${plan.artifact.name} on ${plan.harness}?`;
+    document.getElementById("detail").textContent = `${plan.artifact.id} · ${plan.artifact.digest} · support: ${plan.support}`;
+    const list = document.getElementById("commands");
+    list.innerHTML = "";
+    for (const cmd of plan.commands ?? []) {
+      const li = document.createElement("li");
+      const code = document.createElement("code");
+      code.textContent = cmd;
+      li.append(code);
+      list.append(li);
+    }
+  };
+
+  await app.connect();
+  applyHostContext(app.getHostContext());
+
+  document.getElementById("confirm").addEventListener("click", () => {
+    app.sendMessage({ role: "user", content: [{ type: "text", text: "Approved. Create the approval grant and apply the install." }] });
+  });
+  document.getElementById("cancel").addEventListener("click", () => {
+    app.sendMessage({ role: "user", content: [{ type: "text", text: "Cancelled. Do not install." }] });
+  });
+})();
+</script>

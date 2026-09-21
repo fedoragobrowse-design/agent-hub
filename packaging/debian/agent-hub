@@ -3,4 +3,10 @@ set -eu
 APP_ROOT=/usr/lib/agent-hub
 PORT="${PORT:-3000}"
 export BUN_INSTALL="$APP_ROOT/.bun"
-exec "$APP_ROOT/bin/bun" run --cwd "$APP_ROOT/apps/web" dev --hostname 127.0.0.1 --port "$PORT"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/agent-hub/environment"
+if [ -r "$CONFIG" ]; then
+  set -a
+  . "$CONFIG"
+  set +a
+fi
+exec "$APP_ROOT/bin/bun" run --cwd "$APP_ROOT/apps/web" start --hostname 127.0.0.1 --port "$PORT"

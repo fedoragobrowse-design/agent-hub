@@ -3,5 +3,9 @@ node_modules/
 dist/
 .package-stage/
 *.tsbuildinfo
+*.log
+.omp/
+packages/*/src/*.js
+packages/*/src/*.d.ts
 .env
 .env.local

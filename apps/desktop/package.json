@@ -1,0 +1,16 @@
+{
+  "name": "@agent-hub/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "electron .",
+    "build": "ELECTRON_RUN_AS_NODE=1 ./node_modules/electron/dist/electron --check main.cjs",
+    "typecheck": "ELECTRON_RUN_AS_NODE=1 ./node_modules/electron/dist/electron --check main.cjs",
+    "test": "node --test",
+    "lint": "ELECTRON_RUN_AS_NODE=1 ./node_modules/electron/dist/electron --check main.cjs"
+  },
+  "dependencies": {
+    "electron": "^40.0.0"
+  }
+}

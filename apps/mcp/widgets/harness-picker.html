@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="color-scheme" content="light dark" />
+<style>
+  :root {
+    --ink: var(--color-text-primary, #202b43);
+    --sub: var(--color-text-secondary, #5a6270);
+    --line: var(--color-border-default, #dbe2ef);
+    --panel: var(--color-surface-primary, #fbfcff);
+    --route: #3157b7;
+    --marker: #f1c148;
+  }
+  html, body { background: transparent; color: var(--ink); }
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; }
+  .wrap { padding: 4px 2px; }
+  .route { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+  .route .marker { width: 6px; align-self: stretch; border-radius: 3px; background: var(--marker); }
+  .route b { font-size: 14px; }
+  .route small { color: var(--sub); font-size: 12px; }
+  ul { list-style: none; padding: 0; margin: 0; max-height: 280px; overflow-y: auto; }
+  li { display: flex; gap: 10px; align-items: baseline; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 8px; background: var(--panel); cursor: pointer; }
+  li[aria-checked="true"] { outline: 2px solid var(--route); }
+  .pick { margin-left: auto; }
+  .sub { color: var(--sub); font-size: 12px; }
+  .note { font-size: 12px; border-left: 3px solid var(--marker); padding: 2px 8px; margin: 6px 0 0; color: var(--sub); }
+</style>
+<div class="wrap">
+  <p class="route"><span class="marker"></span><b id="route-name">Harness</b><small id="route-sub"></small></p>
+  <ul id="list" role="radiogroup" aria-label="Harness picker"></ul>
+</div>
+<script type="module">
+/*__EXT_APPS_BUNDLE__*/
+const { App, applyHostStyleVariables } = globalThis.ExtApps;
+(async () => {
+  const app = new App({ name: "HarnessPicker", version: "1.0.0" }, { autoResize: true });
+  const ul = document.getElementById("list");
+  const routeName = document.getElementById("route-name");
+  const routeSub = document.getElementById("route-sub");
+
+  function applyHostContext(ctx) {
+    document.documentElement.classList.toggle("dark", ctx?.theme === "dark");
+    if (ctx?.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
+  }
+  app.onhostcontextchanged = applyHostContext;
+
+  app.ontoolresult = ({ content }) => {
+    const { harnesses, note } = JSON.parse(content[0].text);
+    ul.innerHTML = "";
+    for (const h of harnesses) {
+      const li = document.createElement("li");
+      li.setAttribute("role", "radio");
+      li.setAttribute("aria-checked", String(Boolean(h.selected)));
+      li.tabIndex = 0;
+      li.innerHTML = `<div><div><b></b> <span class="sub"></span></div><div class="sub"></div>${h.note ? `<p class="note"></p>` : ""}</div><span class="pick sub">Select</span>`;
+      li.querySelector("b").textContent = h.displayName;
+      li.querySelectorAll(".sub")[0].textContent = h.id;
+      li.querySelectorAll(".sub")[1].textContent = `${h.installed ? "Detected" : "Not detected"} · ${h.command}`;
+      if (h.note) li.querySelector(".note").textContent = h.note;
+      if (h.selected) {
+        routeName.textContent = h.displayName;
+        routeSub.textContent = `Route: ${h.command}`;
+      }
+      const choose = () => {
+        app.sendMessage({ role: "user", content: [{ type: "text", text: `Route future drafts to ${h.id} (${h.displayName}).` }] });
+      };
+      li.addEventListener("click", choose);
+      li.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); choose(); } });
+      ul.append(li);
+    }
+    if (note) routeSub.textContent = note;
+  };
+
+  await app.connect();
+  applyHostContext(app.getHostContext());
+})();
+</script>
