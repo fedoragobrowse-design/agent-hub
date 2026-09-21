@@ -552,19 +552,117 @@ export async function getServerCwd(): Promise<string> {
   return path.resolve(process.cwd(), "..", "..");
 }
 
-export async function listChildDirs(dir: string): Promise<{ parent: string; dirs: string[] }> {
+export type DirEntry = { name: string; path: string; kind: "dir" | "file"; size?: number };
+export type DirListing = { dir: string; parent: string; entries: DirEntry[] };
+
+export async function listDir(dir: string): Promise<DirListing> {
   const resolved = path.resolve(dir || process.cwd());
   const repoRoot = path.resolve(process.cwd(), "..", "..");
   const allowed = [repoRoot, os.homedir()];
   const ok = allowed.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`));
   if (!ok) throw new Error("Directory must stay inside the repo or home directory.");
   const dirents = await fs.readdir(resolved, { withFileTypes: true });
-  const dirs = dirents
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules")
-    .map((entry) => entry.name)
-    .sort()
-    .slice(0, 100);
-  return { parent: path.dirname(resolved), dirs: dirs.map((name) => path.join(resolved, name)) };
+  const entries: DirEntry[] = [];
+  for (const entry of dirents) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+    const full = path.join(resolved, entry.name);
+    if (entry.isDirectory()) {
+      entries.push({ name: entry.name, path: full, kind: "dir" });
+    } else if (entry.isFile()) {
+      let size: number | undefined;
+      try {
+        size = (await fs.stat(full)).size;
+      } catch {
+        size = undefined;
+      }
+      entries.push({ name: entry.name, path: full, kind: "file", size });
+    }
+    if (entries.length >= 200) break;
+  }
+  entries.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "dir" ? -1 : 1));
+  return { dir: resolved, parent: path.dirname(resolved), entries };
+}
+
+export async function listChildDirs(dir: string): Promise<{ parent: string; dirs: string[] }> {
+  const listing = await listDir(dir);
+  return { parent: listing.parent, dirs: listing.entries.filter((entry) => entry.kind === "dir").map((entry) => entry.path) };
+}
+
+export type GitStatus = {
+  isRepo: boolean;
+  branch?: string;
+  ahead?: number;
+  behind?: number;
+  staged: string[];
+  unstaged: string[];
+  untracked: string[];
+  error?: string;
+};
+
+async function runGit(cwd: string, args: string[]): Promise<string> {
+  const { promise, resolve, reject } = Promise.withResolvers<string>();
+  const child = spawn("git", ["-C", cwd, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+  let out = "";
+  let err = "";
+  child.stdout.on("data", (chunk: Buffer) => {
+    out += chunk.toString();
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    err += chunk.toString();
+  });
+  child.on("error", reject);
+  child.on("close", (code) => {
+    if (code === 0) resolve(out);
+    else reject(new Error(err.trim() || `git exited ${code ?? "unknown"}`));
+  });
+  return promise;
+}
+
+export async function gitStatus(cwd: string): Promise<GitStatus> {
+  try {
+    await runGit(cwd, ["rev-parse", "--git-dir"]);
+  } catch {
+    return { isRepo: false, staged: [], unstaged: [], untracked: [] };
+  }
+  try {
+    const [branchRaw, porcelain] = await Promise.all([
+      runGit(cwd, ["branch", "--show-current"]),
+      runGit(cwd, ["status", "--porcelain=v1", "-uall"]),
+    ]);
+    const staged: string[] = [];
+    const unstaged: string[] = [];
+    const untracked: string[] = [];
+    for (const line of porcelain.split("\n")) {
+      if (!line) continue;
+      const index = line[0] ?? " ";
+      const worktree = line[1] ?? " ";
+      const file = line.slice(3).trim();
+      if (index === "?" && worktree === "?") untracked.push(file);
+      else {
+        if (index !== " " && index !== "?") staged.push(file);
+        if (worktree !== " " && worktree !== "?") unstaged.push(file);
+      }
+    }
+    return {
+      isRepo: true,
+      branch: branchRaw.trim() || "detached",
+      staged: staged.slice(0, 50),
+      unstaged: unstaged.slice(0, 50),
+      untracked: untracked.slice(0, 50),
+    };
+  } catch (error) {
+    return { isRepo: true, staged: [], unstaged: [], untracked: [], error: error instanceof Error ? error.message : "git status failed" };
+  }
+}
+
+export async function gitDiff(cwd: string, file?: string, staged?: boolean): Promise<string> {
+  const args = file
+    ? staged
+      ? ["diff", "--cached", "--", file]
+      : ["diff", "--", file]
+    : ["diff", "--stat"];
+  const out = await runGit(cwd, args);
+  return out.slice(0, 20000);
 }
 
 export async function listSessions(): Promise<OmpSession[]> {

@@ -40,9 +40,26 @@ type ConfigGroups = Record<string, Record<string, ConfigField>>;
 type UsageReport = {
   reports?: Array<{
     provider?: unknown;
-    limits?: Array<{ label?: unknown; id?: unknown; status?: unknown; amount?: { usedFraction?: unknown } }>;
+    limits?: Array<{
+      label?: unknown;
+      id?: unknown;
+      status?: unknown;
+      amount?: { usedFraction?: unknown; remainingFraction?: unknown };
+      window?: { label?: unknown; resetsAt?: unknown };
+    }>;
   }>;
 };
+
+function formatReset(epochMs: number): string {
+  const diff = epochMs - Date.now();
+  if (diff <= 0) return "resetting…";
+  const mins = Math.round(diff / 60000);
+  if (mins < 60) return `resets in ${mins}m`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `resets in ${hours}h`;
+  const days = Math.round(hours / 24);
+  return `resets in ${days}d`;
+}
 type OpsState = { processes?: unknown; worktrees?: unknown; collab?: unknown; note?: string; error?: string };
 type GatewayState = {
   reachable: boolean;
@@ -234,6 +251,10 @@ export default function OmpDeck() {
   const [runMode, setRunMode] = useState<(typeof RUN_MODES)[number]["id"]>("");
   const [cwd, setCwd] = useState("");
   const [cwdPicker, setCwdPicker] = useState<{ parent: string; dirs: string[] } | null>(null);
+  const [attached, setAttached] = useState<string[]>([]);
+  const [browser, setBrowser] = useState<{ dir: string; parent: string; entries: Array<{ name: string; path: string; kind: string; size?: number }>; git: { isRepo: boolean; branch?: string; staged: string[]; unstaged: string[]; untracked: string[] } | null } | null>(null);
+  const [browserError, setBrowserError] = useState<string | null>(null);
+  const [diffView, setDiffView] = useState<string | null>(null);
   const [cwdError, setCwdError] = useState<string | null>(null);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
@@ -447,6 +468,33 @@ export default function OmpDeck() {
     return false;
   }
 
+  async function openBrowser(dir?: string) {
+    setBrowserError(null);
+    try {
+      const data = await api<{ dir: string; parent: string; entries: Array<{ name: string; path: string; kind: string; size?: number }>; git: { isRepo: boolean; branch?: string; staged: string[]; unstaged: string[]; untracked: string[] } | null }>(
+        `/api/omp/files?dir=${encodeURIComponent(dir ?? (cwd || "."))}`,
+      );
+      setBrowser(data);
+      setCwdPicker({ parent: data.parent, dirs: data.entries.filter((e) => e.kind === "dir").map((e) => e.path) });
+    } catch (error) {
+      setBrowserError(error instanceof Error ? error.message : "Could not browse files.");
+    }
+  }
+
+  async function openDiff(file?: string, staged?: boolean) {
+    try {
+      const params = new URLSearchParams({ dir: cwd || ".", git: "diff", ...(file ? { file } : {}), ...(staged ? { staged: "1" } : {}) });
+      const data = await api<{ diff?: string }>(`/api/omp/files?${params.toString()}`);
+      setDiffView(data.diff ?? "(no diff)");
+    } catch (error) {
+      setDiffView(error instanceof Error ? error.message : "Could not load diff.");
+    }
+  }
+
+  function attachFile(file: string) {
+    setAttached((prev) => (prev.includes(file) ? prev : [...prev.slice(-4), file]));
+  }
+
   async function openCwdPicker(dir?: string) {
     setCwdError(null);
     try {
@@ -466,10 +514,12 @@ export default function OmpDeck() {
       return;
     }
     if (applySlashCommand(text)) return;
+    const withFiles = attached.length > 0 ? `${attached.map((f) => `@${f}`).join(" ")} ${text}` : text;
+    setAttached([]);
     setNotice(null);
     setSending(true);
     setSlashOpen(false);
-    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", text, cwd };
+    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", text: withFiles, cwd };
     setMessages((current) => [...current, userMessage]);
     setPrompt("");
     const assistantId = crypto.randomUUID();
@@ -479,7 +529,7 @@ export default function OmpDeck() {
     setMessages((current) => [...current, { id: assistantId, role: "assistant", text: "", model, cwd }]);
     try {
       const body: Record<string, unknown> = {
-        prompt: text,
+        prompt: withFiles,
         model: model || undefined,
         resume: resume || undefined,
         thinking,
@@ -720,16 +770,22 @@ export default function OmpDeck() {
     }
   }
 
-  const usageLimits: Array<{ label: string; pct: number; status: string }> = [];
+  const usageLimits: Array<{ label: string; provider: string; window: string; pct: number; status: string; remaining: string; resets: string }> = [];
   for (const report of usage?.reports ?? []) {
     const provider = asString(report.provider) || "?";
     for (const limit of report.limits ?? []) {
       const frac = limit.amount?.usedFraction;
       if (typeof frac === "number") {
+        const remainingFrac = limit.amount?.remainingFraction;
+        const resetsAt = limit.window?.resetsAt;
         usageLimits.push({
           label: `${provider} · ${asString(limit.label) || asString(limit.id) || "limit"}`,
+          provider,
+          window: asString(limit.label) || asString(limit.window?.label) || asString(limit.id) || "limit",
           pct: Math.round(frac * 100),
           status: asString(limit.status) || "ok",
+          remaining: typeof remainingFrac === "number" ? `${Math.round(remainingFrac * 100)}%` : "—",
+          resets: typeof resetsAt === "number" ? formatReset(resetsAt) : "",
         });
       }
     }
@@ -757,33 +813,86 @@ export default function OmpDeck() {
       <button
         type="button"
         className="composer-cwd"
-        onClick={() => void openCwdPicker()}
+        onClick={() => void openBrowser()}
         title="Working directory — click to change"
       >
         <span aria-hidden="true">📁</span> {cwd || "…"}
         {cwdError ? ` · ${cwdError}` : ""}
       </button>
-      {cwdPicker && (
-        <div className="prompt-box" role="dialog" aria-label="Choose working directory">
-          <b>{cwd}</b>
-          <div className="prompt-actions" style={{ flexWrap: "wrap" }}>
-            <button type="button" onClick={() => { setCwd(cwdPicker.parent); setCwdPicker(null); void openCwdPicker(cwdPicker.parent); }}>
+      {(cwdPicker || browser) && (
+        <div className="prompt-box file-browser" role="dialog" aria-label="File browser">
+          <b>{browser?.dir ?? cwd}</b>
+          {browser?.git?.isRepo && (
+            <small> · {browser.git.branch} · {browser.git.unstaged.length + browser.git.staged.length} changed</small>
+          )}
+          <div className="browser-entries">
+            <button type="button" onClick={() => { const parent = browser?.parent ?? cwdPicker?.parent; if (parent) { setCwd(parent); void openBrowser(parent); } }}>
               ↑ parent
             </button>
-            {cwdPicker.dirs.slice(0, 12).map((dir) => (
-              <button
-                key={dir}
-                type="button"
-                onClick={() => { setCwd(dir); setCwdPicker(null); }}
-                title={dir}
-              >
-                {dir.split("/").pop()}
-              </button>
+            {(browser?.entries ?? []).slice(0, 40).map((entry) => (
+              entry.kind === "dir" ? (
+                <button
+                  key={entry.path}
+                  type="button"
+                  onClick={() => { setCwd(entry.path); void openBrowser(entry.path); }}
+                  title={entry.path}
+                >
+                  📁 {entry.name}
+                </button>
+              ) : (
+                <button
+                  key={entry.path}
+                  type="button"
+                  onClick={() => attachFile(entry.path)}
+                  title={`Attach ${entry.path}`}
+                >
+                  📄 {entry.name}
+                </button>
+              )
             ))}
-            <button type="button" onClick={() => setCwdPicker(null)}>
+          </div>
+          {browser?.git?.isRepo && (browser.git.unstaged.length > 0 || browser.git.staged.length > 0 || browser.git.untracked.length > 0) && (
+            <div className="git-panel">
+              <b>git {browser.git.branch}</b>
+              {browser.git.unstaged.slice(0, 8).map((file) => (
+                <div key={file} className="git-row">
+                  <span>M {file}</span>
+                  <button type="button" onClick={() => void openDiff(file, false)}>diff</button>
+                  <button type="button" onClick={() => attachFile(`${cwd}/${file}`)}>attach</button>
+                </div>
+              ))}
+              {browser.git.untracked.slice(0, 8).map((file) => (
+                <div key={file} className="git-row">
+                  <span>? {file}</span>
+                  <button type="button" onClick={() => attachFile(`${cwd}/${file}`)}>attach</button>
+                </div>
+              ))}
+              <div className="row-actions">
+                <button type="button" onClick={() => void openDiff(undefined, false)}>full diff --stat</button>
+              </div>
+            </div>
+          )}
+          {browserError && <small>{browserError}</small>}
+          {diffView && (
+            <pre className="diff-view">{diffView.slice(0, 4000)}</pre>
+          )}
+          <div className="prompt-actions">
+            <button type="button" onClick={() => { setCwdPicker(null); setBrowser(null); setDiffView(null); }}>
               Close
             </button>
           </div>
+        </div>
+      )}
+      {attached.length > 0 && (
+        <div className="attached-chips">
+          {attached.map((file) => (
+            <span key={file} className="attached-chip" title={file}>
+              📎 {file.split("/").pop()}
+              <button type="button" aria-label={`Remove ${file}`} onClick={() => setAttached((prev) => prev.filter((f) => f !== file))}>
+                ×
+              </button>
+            </span>
+          ))}
         </div>
       )}
       <div className="composer-box">
@@ -815,6 +924,8 @@ export default function OmpDeck() {
             } else if (event.key === "Escape") {
               setSlashOpen(false);
               setCwdPicker(null);
+              setBrowser(null);
+              setDiffView(null);
             }
           }}
           placeholder="How can I help you today? Try / for commands."
@@ -1359,8 +1470,8 @@ export default function OmpDeck() {
               <p>
                 Working with <strong>Usage</strong>.
               </p>
-              <h1>Limits.</h1>
-              <p className="intro-detail">Straight from omp usage.</p>
+              <h1>How much fuel is left.</h1>
+              <p className="intro-detail">Live from <code>omp usage</code> — resets count down in plain words.</p>
             </div>
             {usageError && (
               <div className="alert-box" role="alert">
@@ -1369,18 +1480,23 @@ export default function OmpDeck() {
             )}
             <div className="panel-list">
               {usageLimits.map((limit) => (
-                <div className="panel-row" key={limit.label}>
-                  <b>{limit.label}</b>
-                  <code>
-                    {limit.pct}% used · {limit.status}
-                  </code>
+                <div className="panel-row usage-card" key={limit.label} data-status={limit.pct > 90 ? "crit" : limit.pct > 70 ? "warn" : "ok"}>
+                  <div className="usage-top">
+                    <b>{limit.provider}</b>
+                    <span className="usage-badge">{limit.status === "ok" ? "healthy" : limit.status}</span>
+                  </div>
+                  <div className="usage-title">{limit.window}</div>
                   <div
                     className="usage-meter"
                     data-status={limit.pct > 90 ? "crit" : limit.pct > 70 ? "warn" : "ok"}
                     role="img"
-                    aria-label={`${limit.label}: ${limit.pct}% used`}
+                    aria-label={`${limit.label}: ${limit.pct}% used, ${limit.remaining}`}
                   >
                     <i style={{ width: `${Math.min(100, limit.pct)}%` }} />
+                  </div>
+                  <div className="usage-meta">
+                    <span><b>{limit.pct}%</b> used · {limit.remaining} left</span>
+                    <span>{limit.resets}</span>
                   </div>
                 </div>
               ))}

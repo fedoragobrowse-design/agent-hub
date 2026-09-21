@@ -71,10 +71,10 @@ cat > "$STAGE/agent-hub/apps/desktop/bin/electron.cmd" <<'SCRIPT'
 setlocal
 "%~dp0..\..\electron-win\electron.exe" "%~dp0.." %*
 SCRIPT
+cp "$ROOT/packaging/debian/icons/agent-hub.svg" "$STAGE/agent-hub/agent-hub.svg"
 if [ -n "$UPDATE_REPOSITORY" ]; then
   printf '%s\n' "AGENT_HUB_UPDATE_REPOSITORY=$UPDATE_REPOSITORY" > "$STAGE/agent-hub/apps/desktop/update.env"
 fi
-
 (cd "$STAGE" && zip -qr "$OUT/agent-hub_${VERSION}_win-x64.zip" "agent-hub")
 (cd "$OUT" && sha256sum "agent-hub_${VERSION}_win-x64.zip" > "agent-hub_${VERSION}_win-x64.zip.sha256")
 ls -la "$OUT/agent-hub_${VERSION}_win-x64.zip"
